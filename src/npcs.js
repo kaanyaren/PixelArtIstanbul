@@ -14,6 +14,10 @@ const SHIRTS = [0xc94f4f, 0x4f7ac9, 0x53a05a, 0x8a5ac9, 0xd98a3d, 0x3bb8a6, 0xe2
 const SKIN = 0xe8b88a, PANTS = 0x2e3440;
 const DEFAULT_ROADS = [[{ x: 16, y: 120 }, { x: 784, y: 120 }, { x: 784, y: 184 }, { x: 16, y: 184 }], [{ x: 16, y: 400 }, { x: 784, y: 400 }, { x: 784, y: 464 }, { x: 16, y: 464 }]];
 function getBounds(scene) {
+  if (scene && scene.npcCenter) {
+    const { x, y } = scene.npcCenter;
+    return { x0: x - 350, y0: y - 250, x1: x + 350, y1: y + 250 };
+  }
   try {
     const cam = scene && scene.cameras && scene.cameras.main;
     if (cam && cam.width && cam.height) return { x0: 8, y0: 8, x1: cam.width - 8, y1: cam.height - 8 };
@@ -126,7 +130,7 @@ export function spawnCats(scene, count) {
     const ci = Math.floor(Math.random() * CAT_DEFS.length), sitting = Math.random() < 0.3;
     const x = randBetween(bounds.x0, bounds.x1), y = randBetween(bounds.y0, bounds.y1);
     const sprite = scene.add.image(x, y, `npc-cat-${CAT_DEFS[ci].name}-0`);
-    sprite.setDepth(x + y);
+    sprite.setDepth(x + y + 20000);
     const t = pickTile(x, y, bounds, CAT_TILE);
     cats.push({ sprite, bounds, ci, frame: 0, wag: randBetween(0, WAG_TIME), sitting, tx: t.x, ty: t.y, timer: randBetween(1, 3) });
   }
@@ -142,12 +146,12 @@ export function spawnCars(scene, count) {
     if (i < parked) {
       const p = pts[i % pts.length];
       const sprite = scene.add.image(p.x, p.y + 8, key);
-      sprite.setDepth(p.y + 8);
+      sprite.setDepth(p.y + 8 + 20000);
       cars.push({ sprite, pts, seg: 0, speed: 0, parked: true });
     } else {
       const seg = Math.floor(Math.random() * pts.length) % pts.length;
       const sprite = scene.add.image(pts[seg].x, pts[seg].y, key);
-      sprite.setDepth(pts[seg].y);
+      sprite.setDepth(pts[seg].y + 20000);
       cars.push({ sprite, pts, seg, speed: CAR_SPEED, parked: false });
     }
   }
@@ -164,7 +168,7 @@ export function spawnPeople(scene, count) {
       y = Math.min(Math.max(p.y + (Math.random() < 0.5 ? -12 : 12), bounds.y0), bounds.y1);
     }
     const sprite = scene.add.image(x, y, `npc-person-${si}-0`);
-    sprite.setDepth(x + y);
+    sprite.setDepth(x + y + 20000);
     const t = pickTile(x, y, bounds, PERSON_TILE);
     people.push({ sprite, bounds, si, frame: 0, walk: 0, tx: t.x, ty: t.y, timer: randBetween(1, 3) });
   }
@@ -175,7 +179,7 @@ export function spawnGulls(scene, count) {
   const skyY1 = bounds.y0 + (bounds.y1 - bounds.y0) * 0.3;
   for (let i = 0; i < n; i++) {
     const sprite = scene.add.image(randBetween(bounds.x0, bounds.x1), randBetween(bounds.y0, skyY1), `npc-gull-${i % 2}`);
-    sprite.setDepth(999);
+    sprite.setDepth(30000);
     const dir = Math.random() < 0.5 ? -1 : 1;
     gulls.push({ sprite, bounds, vx: dir * randBetween(12, 28), baseY: sprite.y, phase: randBetween(0, 6.28), flap: randBetween(0, WAG_TIME), frame: 0 });
   }
@@ -187,7 +191,7 @@ function updateCat(c, dt) {
   c.timer -= dt;
   if (c.timer <= 0) { const t = pickTile(c.sprite.x, c.sprite.y, c.bounds, CAT_TILE); c.tx = t.x; c.ty = t.y; c.timer = randBetween(1, 3); }
   stepToward(c.sprite, c.tx, c.ty, CAT_SPEED, dt);
-  c.sprite.setDepth(c.sprite.x + c.sprite.y);
+  c.sprite.setDepth(c.sprite.x + c.sprite.y + 20000);
 }
 function updateCar(c, dt) {
   if (c.parked) return;
@@ -199,7 +203,7 @@ function updateCar(c, dt) {
     if (remaining < d) { c.sprite.x += (dx / d) * remaining; c.sprite.y += (dy / d) * remaining; c.sprite.setFlipX(dx < 0); remaining = 0; }
     else { c.sprite.x = target.x; c.sprite.y = target.y; c.seg = (c.seg + 1) % c.pts.length; remaining -= d; }
   }
-  c.sprite.setDepth(c.sprite.y);
+  c.sprite.setDepth(c.sprite.y + 20000);
 }
 function updatePerson(p, dt) {
   p.walk += dt;
@@ -207,7 +211,7 @@ function updatePerson(p, dt) {
   p.timer -= dt;
   if (p.timer <= 0) { const t = pickTile(p.sprite.x, p.sprite.y, p.bounds, PERSON_TILE); p.tx = t.x; p.ty = t.y; p.timer = randBetween(1, 3); }
   stepToward(p.sprite, p.tx, p.ty, PERSON_SPEED, dt);
-  p.sprite.setDepth(p.sprite.x + p.sprite.y);
+  p.sprite.setDepth(p.sprite.x + p.sprite.y + 20000);
 }
 function updateGull(gl, dt) {
   gl.flap += dt;

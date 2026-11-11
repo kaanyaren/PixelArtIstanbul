@@ -1,0 +1,9 @@
+- generic [active] [ref=f8e1]:
+  - generic [ref=f8e2]:
+    - text: "Choose walker:"
+    - button "Green" [ref=f8e3] [cursor=pointer]
+    - button "Blue" [ref=f8e4] [cursor=pointer]
+    - button "Red" [ref=f8e5] [cursor=pointer]
+    - text: WASD / Arrows to move
+  - generic [ref=f8e8]: © OpenStreetMap contributors ODbL
+  - generic [ref=f8e9]: "{\"b\":127,\"r\":93,\"cart\":[-104,118],\"p\":[-1371,197]}"

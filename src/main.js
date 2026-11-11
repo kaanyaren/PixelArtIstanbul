@@ -152,12 +152,12 @@ class MainScene extends Phaser.Scene {
       ],
       true,
     );
-    // Subtle block variation: 8m iso cells in 3 warm shades.
-    const cell = 8;
+    // Subtle block variation: 16m iso cells in 3 warm shades.
+    const cell = 16;
     const nx = Math.ceil((maxX - minX) / cell);
     const ny = Math.ceil((maxY - minY) / cell);
     if (nx * ny <= 4000) {
-      const shades = [0xe8dcc0, 0xe3d2b2, 0xede1c2];
+      const shades = [0xe8dcc0, 0xdcc9a4, 0xf2e7cc];
       const rand = mulberry32(7);
       for (let ix = 0; ix < nx; ix++) {
         for (let iy = 0; iy < ny; iy++) {
@@ -214,6 +214,9 @@ class MainScene extends Phaser.Scene {
     buildings.sort((p, q) => p.bb.minX + p.bb.minY - (q.bb.minX + q.bb.minY));
     for (const { b, cart, bb } of buildings) {
       const base = cart.map(([x, y]) => toScreen(x, y));
+      // Warm courtyard parcel under each building.
+      g.fillStyle(0xefe3cb, 1);
+      g.fillPoints(base.map((p) => new Phaser.Geom.Point(p.x, p.y + 2)), true);
       const seed = hashStr(String(b.id ?? `${bb.minX},${bb.minY}`));
       const facade = b.color ?? PAL.facades[seed % PAL.facades.length];
       const floors = Math.max(1, Math.round(b.height / 3));
@@ -263,27 +266,56 @@ class MainScene extends Phaser.Scene {
     // Screen-space road loops for cars (NPC module reads scene.roads).
     this.roads = roadLines.map((line) => line.map(([x, y]) => toScreen(x, y)));
 
-    // Player start: middle of first road, else first building, else default.
-    if (roadLines.length > 0 && roadLines[0].length > 0) {
-      const mid = roadLines[0][Math.floor(roadLines[0].length / 2)];
-      this.cartX = mid[0];
-      this.cartY = mid[1] + 3;
-    } else if (buildings.length > 0) {
-      this.cartX = (buildings[0].bb.minX + buildings[0].bb.maxX) / 2;
-      this.cartY = buildings[0].bb.maxY + 3;
+    // Player start: center of all mapped geometry (dense area), nudged off walls.
+    // Player start: densest building cluster (most neighbors within 60m).
+    let bestC = null;
+    let bestN = -1;
+    const centers = buildings.map(({ bb }) => [(bb.minX + bb.maxX) / 2, (bb.minY + bb.maxY) / 2]);
+    for (const [cx0, cy0] of centers) {
+      let n = 0;
+      for (const [ox, oy] of centers) {
+        if (Math.hypot(ox - cx0, oy - cy0) < 60) n++;
+      }
+      if (n > bestN) {
+        bestN = n;
+        bestC = [cx0, cy0];
+      }
+    }
+    this.cartX = bestC ? bestC[0] : 0;
+    this.cartY = bestC ? bestC[1] + 3 : 3;
+    // Nudge out of any building bbox.
+    for (let tries = 0; tries < 40 && this.blocked(this.cartX, this.cartY); tries++) {
+      this.cartX += 2;
+      this.cartY += 2;
     }
 
-    // Character: tiny 8x14 pixel walker, 2-frame legs, head + hair, tint shirt.
-    const tint = window.__playerTint ?? playerTint;
-    this.player = this.add.container(0, 0);
-    this.legL = this.add.rectangle(-2, -1, 2, 3, 0x3a3a4a);
-    this.legR = this.add.rectangle(2, -1, 2, 3, 0x3a3a4a);
-    this.shirt = this.add.rectangle(0, -6, 8, 6, tint);
-    const head = this.add.rectangle(0, -11, 6, 4, 0xf2c89b);
-    const hair = this.add.rectangle(0, -12, 6, 2, 0x5a3a22);
-    this.player.add([this.legL, this.legR, this.shirt, head, hair]);
-    this.playerBody = this.shirt;
-    window.__setTint = (t) => this.shirt.setFillStyle(t);
+    // Character: 10x14 texture walker (images render reliably), 3 shirt colors x 2 frames.
+    const WALK = { Green: 0x4dc26b, Blue: 0x4d8ac2, Red: 0xc25d4d };
+    this.walkSet = 'Green';
+    for (const [name, shirt] of Object.entries(WALK)) {
+      for (let f = 0; f < 2; f++) {
+        const key = `walk-${name}-${f}`;
+        if (this.textures.exists(key)) continue;
+        const wg = this.make.graphics({ x: 0, y: 0, add: false });
+        wg.fillStyle(0x5a3a22, 1).fillRect(2, 0, 6, 2);
+        wg.fillStyle(0xf2c89b, 1).fillRect(2, 2, 6, 3);
+        wg.fillStyle(0x222222, 1).fillRect(3, 3, 1, 1).fillRect(6, 3, 1, 1);
+        wg.fillStyle(shirt, 1).fillRect(1, 5, 8, 5);
+        wg.fillStyle(0x2e3440, 1);
+        if (f === 0) wg.fillRect(2, 10, 2, 4).fillRect(6, 10, 2, 3);
+        else wg.fillRect(2, 10, 2, 3).fillRect(6, 10, 2, 4);
+        wg.generateTexture(key, 10, 14);
+        wg.destroy();
+      }
+    }
+    const tint0 = window.__playerTint ?? playerTint;
+    if (tint0 === 0x4d8ac2) this.walkSet = 'Blue';
+    if (tint0 === 0xc25d4d) this.walkSet = 'Red';
+    this.player = this.add.image(0, 0, `walk-${this.walkSet}-0`);
+    window.__setTint = (t) => {
+      this.walkSet = t === 0x4d8ac2 ? 'Blue' : t === 0xc25d4d ? 'Red' : 'Green';
+      this.player.setTexture(`walk-${this.walkSet}-0`);
+    };
     document.querySelectorAll('#select button').forEach((btn) => {
       btn.addEventListener('click', () => window.__setTint(Number(btn.dataset.tint)));
     });
@@ -291,6 +323,7 @@ class MainScene extends Phaser.Scene {
     this.syncPlayer();
     this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
     this.cameras.main.setZoom(1.2);
+    this.npcCenter = { x: this.player.x, y: this.player.y };
     spawnCats(this, 8);
     spawnCars(this, 5);
     spawnPeople(this, 6);
@@ -330,15 +363,12 @@ class MainScene extends Phaser.Scene {
     // Axis-separated bbox block so player slides along walls.
     if (!this.blocked(this.cartX + stepX, this.cartY)) this.cartX += stepX;
     if (!this.blocked(this.cartX, this.cartY + stepY)) this.cartY += stepY;
-    // 2-frame leg animation while moving; rest pose when idle.
+    // 2-frame walk animation while moving; rest pose when idle.
     if (Math.hypot(this.velX, this.velY) > 1) {
       this.walkPhase += dt * 10;
-      const o = Math.floor(this.walkPhase) % 2 === 0 ? 1 : -1;
-      this.legL.y = -1 + o;
-      this.legR.y = -1 - o;
+      this.player.setTexture(`walk-${this.walkSet}-${Math.floor(this.walkPhase) % 2}`);
     } else {
-      this.legL.y = -1;
-      this.legR.y = -1;
+      this.player.setTexture(`walk-${this.walkSet}-0`);
     }
     this.syncPlayer();
   }
@@ -346,7 +376,7 @@ class MainScene extends Phaser.Scene {
   syncPlayer() {
     const p = toScreen(this.cartX, this.cartY);
     this.player.setPosition(p.x, p.y);
-    this.player.setDepth(p.x + p.y);
+    this.player.setDepth(p.x + p.y + 20000);
   }
 }
 
@@ -361,4 +391,5 @@ const config = {
   scene: [MainScene],
 };
 
-new Phaser.Game(config);
+window.__game = new Phaser.Game(config);
+window.addEventListener('error', (e) => { window.__err = String((e && e.message) || e); });

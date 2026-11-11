@@ -1,0 +1,62 @@
+- generic [ref=e2]:
+  - link "Dönüştürücüye geç" [ref=e3] [cursor=pointer]:
+    - /url: "#query-input"
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - generic [ref=e7]:
+          - link "PantonAK ana sayfa" [ref=e8] [cursor=pointer]:
+            - /url: ./
+            - img "PantonAK" [ref=e9]
+          - heading "Pantone Karşılığı Bulucu" [level=1] [ref=e10]
+        - navigation "Proje bağlantıları" [ref=e11]:
+          - button "Dili değiştir (Türkçe / English)" [ref=e12] [cursor=pointer]:
+            - generic [ref=e13]: TR
+            - generic [aria-hidden] [ref=e14]: "|"
+            - generic [ref=e15]: EN
+          - link "GitHub (yeni sekmede açılır)" [ref=e16] [cursor=pointer]:
+            - /url: https://github.com/kaanyaren/Pantone
+            - text: GitHub
+            - generic [ref=e17]: (yeni sekmede açılır)
+      - generic [ref=e18]:
+        - generic [ref=e19]: Pantone kodu, iplik no veya renk değeri
+        - generic [ref=e20]:
+          - generic "Görsel olarak renk seç" [ref=e21] [cursor=pointer]:
+            - textbox "Görsel olarak renk seç" [ref=e22]: "#c8102e"
+          - generic [ref=e24]:
+            - combobox "Pantone kodu, iplik no veya renk değeri" [ref=e25]
+            - generic [aria-hidden]: /
+          - button "Eşleştir" [ref=e26] [cursor=pointer]
+        - generic [ref=e28]: "!"
+  - main [ref=e29]:
+    - region [ref=e30]:
+      - group [ref=e31]:
+        - generic "Numune büyüteci −" [ref=e32] [cursor=pointer]:
+          - generic [ref=e33]: Numune büyüteci
+          - text: −
+      - generic [ref=e34]:
+        - generic [ref=e35]:
+          - generic [ref=e36]:
+            - heading "Çapraz referans matrisi" [level=2] [ref=e37]
+            - status
+          - group "Kütüphaneleri aileye göre filtrele" [ref=e39]:
+            - button "Tümü (17)" [pressed] [ref=e40] [cursor=pointer]
+            - button "Baskı C/U" [ref=e41] [cursor=pointer]
+            - button "Tekstil TCX/TPX" [ref=e42] [cursor=pointer]
+            - button "Madeira" [ref=e43] [cursor=pointer]
+            - button "Durak" [ref=e44] [cursor=pointer]
+            - button "İplikler" [ref=e45] [cursor=pointer]
+        - generic [ref=e46]:
+          - button "TSV kopyala" [disabled] [ref=e47]
+          - button "Bağlantıyı kopyala" [ref=e48] [cursor=pointer]
+    - region "Teknik notlar ve kütüphane kaynakları" [ref=e49]:
+      - group [ref=e50]:
+        - generic "CIEDE2000 (D50) tolerans ölçeği ve renk uzayı uyarıları" [ref=e51] [cursor=pointer]
+      - group [ref=e52]:
+        - generic "Yüklenen kütüphaneler, adetler ve kaynak bilgisi" [ref=e53] [cursor=pointer]
+  - contentinfo [ref=e54]:
+    - generic [ref=e55]:
+      - img "PantonAK" [ref=e56]
+      - paragraph [ref=e57]: Yaklaşık dijital referans · Üretimden önce fiziksel renk kartlarını doğrulayın · Pantone LLC, Madeira veya Durak ile bağlantılı değildir.
+      - paragraph [ref=e58]: yükleniyor… · PantonAK
+  - status [ref=e59]

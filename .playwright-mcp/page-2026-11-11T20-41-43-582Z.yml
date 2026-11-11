@@ -1,0 +1,8 @@
+- generic [active] [ref=f12e1]:
+  - generic [ref=f12e2]:
+    - text: "Choose walker:"
+    - button "Green" [ref=f12e3] [cursor=pointer]
+    - button "Blue" [ref=f12e4] [cursor=pointer]
+    - button "Red" [ref=f12e5] [cursor=pointer]
+    - text: WASD / Arrows to move
+  - generic [ref=f12e8]: © OpenStreetMap contributors ODbL

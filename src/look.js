@@ -1,5 +1,5 @@
 export const PAL = {
-  facades: [0xF2E3C6, 0xE8B96A, 0xC96F4A, 0xD99B8A, 0xA8B89A, 0xF7F2E7],
+  facades: [0xF2E3C6, 0xF7F2E7, 0xE8B96A, 0xD99B8A, 0xA8B89A, 0xF2E3C6],
   roofFace: 0xB5432F,
   roofTop: 0xC9563C,
   roofRidge: 0xD4694E,
@@ -66,7 +66,7 @@ function wallPoint(A, B, At, Bt, u, v) {
 
 function windowsOnWall(g, A, B, At, Bt, rng, floors) {
   const len = Math.hypot(B.x - A.x, B.y - A.y);
-  const k = Math.max(1, Math.min(4, Math.round(len / 24)));
+  const k = Math.max(1, Math.min(8, Math.round(len / 40)));
   for (let f = 1; f <= floors; f++) {
     const v = f / (floors + 0.6);
     for (let i = 0; i < k; i++) {
@@ -101,7 +101,7 @@ export function drawBuilding(g, base, opts = {}) {
   let minX = Infinity, maxX = -Infinity, sumX = 0, sumY = 0;
   base.forEach((p) => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); sumX += p.x; sumY += p.y; });
   const cx = sumX / n, gy = sumY / n;
-  ell(g, cx, gy + 4, (maxX - minX) / 2 + 12, 9, 0x3A2A20, 0.18);
+  ell(g, cx, gy + 4, Math.min((maxX - minX) / 2 + 12, 60), 9, 0x3A2A20, 0.18);
 
   const fc = facade ?? PAL.facades[(rng() * PAL.facades.length) | 0];
   let f = 0;
@@ -127,43 +127,31 @@ export function drawBuilding(g, base, opts = {}) {
   windowsOnWall(g, pF, pB, tF, tB, rng, floors);
 
   const tAll = base.map(top);
-  const tMinY = Math.min(...tAll.map((p) => p.y));
-  const tMinX = Math.min(...tAll.map((p) => p.x));
-  const tMaxX = Math.max(...tAll.map((p) => p.x));
-  const tcx = (tMinX + tMaxX) / 2;
+  const tcx = tAll.reduce((s, p) => s + p.x, 0) / tAll.length;
+  const tcy = tAll.reduce((s, p) => s + p.y, 0) / tAll.length;
   const rh = 13 + rng() * 10;
-  const hw = Math.max(10, (tMaxX - tMinX) * 0.32);
-  const r0 = { x: tcx - hw, y: tMinY - rh }, r1 = { x: tcx + hw, y: tMinY - rh };
-  const eL = { x: tMinX - 5, y: tMinY + 3 }, eR = { x: tMaxX + 5, y: tMinY + 3 };
-  g.fillStyle(shade(PAL.roofFace, 1.12), 1);
-  g.fillPoints([r0, r1, { x: r1.x - 7, y: r1.y - 7 }, { x: r0.x - 7, y: r0.y - 7 }], true);
-  g.fillStyle(PAL.roofFace, 1);
-  g.fillPoints([eL, eR, r1, r0], true);
-  g.lineStyle(1, 0x7E2F22, 0.6);
-  for (let i = 1; i <= 3; i++) {
-    const t = i / 4;
-    g.lineBetween(lerp(eL.x, r0.x, t), lerp(eL.y, r0.y, t), lerp(eR.x, r1.x, t), lerp(eR.y, r1.y, t));
+  // Fitted hip roof: outer top rim + inner ridge ring scaled toward centroid.
+  const ridge = tAll.map((p) => ({ x: tcx + (p.x - tcx) * 0.45, y: tcy + (p.y - tcy) * 0.45 - rh }));
+  g.fillStyle(shade(PAL.roofFace, 0.92), 1);
+  g.fillPoints(tAll, true);
+  for (let i = 0; i < tAll.length; i++) {
+    const j = (i + 1) % tAll.length;
+    g.fillStyle(shade(PAL.roofFace, i % 2 ? 1.06 : 0.98), 1);
+    g.fillPoints([tAll[i], tAll[j], ridge[j], ridge[i]], true);
   }
+  g.fillStyle(PAL.roofTop, 1);
+  g.fillPoints(ridge, true);
   g.lineStyle(2, PAL.roofRidge, 1);
-  g.lineBetween(r0.x, r0.y, r1.x, r1.y);
+  g.strokePoints(ridge, true);
   g.lineStyle(2, PAL.trim, 0.9);
-  g.lineBetween(eL.x, eL.y, eR.x, eR.y);
+  g.strokePoints(tAll, true);
 
   if (rng() < 0.7) {
-    const chx = tcx + (rng() - 0.5) * hw;
+    const chx = tcx + (rng() - 0.5) * 20;
     g.fillStyle(0xC96F4A, 1);
-    g.fillRect(chx - 3, r0.y - 8, 7, 12);
+    g.fillRect(chx - 3, tcy - rh - 14, 7, 14);
     g.fillStyle(PAL.trim, 1);
-    g.fillRect(chx - 4, r0.y - 10, 9, 3);
-  }
-  if (rng() < 0.35) {
-    const dx = lerp(tcx, eR.x, 0.15), dy = lerp(r0.y, eR.y, 0.55);
-    g.fillStyle(PAL.trim, 1);
-    g.fillRect(dx - 5, dy - 6, 10, 9);
-    g.fillStyle(PAL.glass, 1);
-    g.fillRect(dx - 3, dy - 4, 6, 6);
-    g.fillStyle(PAL.roofFace, 1);
-    g.fillPoints([{ x: dx - 6, y: dy - 6 }, { x: dx + 6, y: dy - 6 }, { x: dx, y: dy - 11 }], true);
+    g.fillRect(chx - 4, tcy - rh - 16, 9, 3);
   }
 
   if (rng() < 0.3) {
