@@ -3,13 +3,17 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>PixelArtIstanbul — Darphane</title>
+<title>Fractal Darphane — walkable Istanbul</title>
 <style>
-  html, body { margin: 0; background: #1a1c22; color: #eee; font-family: monospace; }
+  html, body { margin: 0; background: #F5DFB8; color: #5A4632; font-family: monospace; }
   #game canvas { image-rendering: pixelated; display: block; margin: 0 auto; }
-  #hud { text-align: center; font-size: 12px; padding: 6px; }
-  #select { text-align: center; padding: 8px; }
-  #select button { font-family: monospace; margin: 0 6px; padding: 8px 12px; cursor: pointer; }
+  #hud { text-align: center; font-size: 12px; padding: 6px; color: #5A4632; }
+  #select { text-align: center; padding: 8px; color: #5A4632; }
+  #select button {
+    font-family: monospace; margin: 0 6px; padding: 8px 14px; cursor: pointer;
+    background: #FFEDCB; color: #5A4632; border: 2px solid #C9A86A; border-radius: 10px;
+  }
+  #select button:hover { background: #FFE3AC; }
 </style>
 <script type="importmap">
 {
