@@ -37,6 +37,19 @@
     border: 2px solid #C9A86A; border-radius: 10px;
   }
   #zoom-ui button:active { background: #FFE3AC; }
+  .settings-panel { background:#FFEDCB; color:#5A4632; border:2px solid #C9A86A; border-radius:12px; max-width:460px; margin:0 auto; padding:16px; font-family:monospace; max-height:85vh; overflow:auto; }
+  .settings-panel h2 { margin:0 0 12px; font-size:16px; }
+  .set-row { display:grid; grid-template-columns:1fr auto; gap:6px 10px; align-items:center; padding:8px 0; border-bottom:1px dashed #E0C79A; }
+  .set-row label { font-size:13px; }
+  .set-val { font-size:12px; opacity:0.85; }
+  .set-row input[type=range] { grid-column:1/-1; width:100%; accent-color:#B5432F; }
+  .set-row select { grid-column:2; font-family:monospace; padding:4px; background:#FFF7E4; border:2px solid #C9A86A; border-radius:8px; color:#5A4632; }
+  .set-row input[type=checkbox] { width:18px; height:18px; accent-color:#B5432F; }
+  .settings-footer { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; justify-content:flex-end; }
+  .settings-footer button { font-family:monospace; padding:8px 14px; cursor:pointer; background:#FFEDCB; color:#5A4632; border:2px solid #C9A86A; border-radius:10px; }
+  .settings-footer button:hover { background:#FFE3AC; }
+  #settings-apply { background:#5A4632; color:#FFEDCB; }
+  .settings-footer button:disabled { opacity:0.5; cursor:default; }
 </style>
 <script type="importmap">
 {
@@ -56,6 +69,7 @@
   <button data-tint="0xc25d4d">Red</button>
   <span>WASD / Arrows to move</span>
   <button id="change-area">📍 Change area</button>
+  <button id="settings-open" aria-label="Settings">⚙️ Settings</button>
 </div>
 <div id="game"></div>
 <div id="zoom-ui">
@@ -70,6 +84,10 @@
 <div id="hud">© OpenStreetMap contributors ODbL · Buildings: Microsoft</div>
 <div id="area-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(90,70,50,0.55);padding:4vh 4vw;box-sizing:border-box;">
   <div style="background:#FFEDCB;border:2px solid #C9A86A;border-radius:12px;max-width:640px;margin:0 auto;padding:12px;color:#5A4632;font-family:monospace;">
+    <div style="display:flex;gap:6px;margin-bottom:8px;">
+      <input id="area-search-input" type="text" placeholder="Search street, avenue, or address (e.g. Rami Kışla Caddesi)" style="flex:1;padding:8px 10px;font-family:monospace;background:#FFF7E4;border:2px solid #C9A86A;border-radius:8px;color:#5A4632;" />
+      <button id="area-search-btn" style="font-family:monospace;padding:8px 14px;cursor:pointer;background:#5A4632;color:#FFEDCB;border:2px solid #C9A86A;border-radius:8px;">Search</button>
+    </div>
     <div id="area-map" style="height:60vh;width:100%;border:2px solid #C9A86A;border-radius:8px;"></div>
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
       <button id="area-play" style="font-family:monospace;padding:8px 14px;cursor:pointer;background:#5A4632;color:#FFEDCB;border:2px solid #C9A86A;border-radius:10px;">Play this area</button>
@@ -80,6 +98,19 @@
 </div>
 <div id="area-loading" style="display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:101;background:#5A4632;color:#FFEDCB;font-family:monospace;padding:8px 16px;border-radius:10px;border:2px solid #C9A86A;">Loading streets…</div>
 <div id="area-err" style="display:none;position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:101;background:#7a2e22;color:#FFEDCB;font-family:monospace;padding:8px 16px;border-radius:10px;border:2px solid #C9A86A;"></div>
+<div id="settings-modal" style="display:none;position:fixed;inset:0;z-index:110;background:rgba(90,70,50,0.55);padding:6vh 4vw;box-sizing:border-box;">
+  <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <h2 id="settings-title">Settings</h2>
+    <div id="settings-rows"></div>
+    <div class="settings-note" id="settings-reload-note" style="display:none;font-size:11px;opacity:0.8;">Area radius and street life apply after reload.</div>
+    <div class="settings-footer">
+      <button id="settings-apply">Apply</button>
+      <button id="settings-reset">Reset</button>
+      <button id="settings-reload" style="display:none">Reload now</button>
+      <button id="settings-close">Done</button>
+    </div>
+  </div>
+</div>
 <script type="module" src="src/main.js"></script>
 </body>
 </html>

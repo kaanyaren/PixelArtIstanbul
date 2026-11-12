@@ -65,16 +65,18 @@ function parseOsmXml(text) {
     const id = way.getAttribute("id");
     if (id == null) continue;
     const pts = [];
+    const refs = [];
     const ndEls = way.getElementsByTagName("nd");
     for (let j = 0; j < ndEls.length; j++) {
       const nd = ndEls[j];
+      const ref = nd.getAttribute("ref");
+      if (ref != null) refs.push(String(ref));
       const nLat = parseFloat(nd.getAttribute("lat"));
       const nLon = parseFloat(nd.getAttribute("lon"));
       if (Number.isFinite(nLat) && Number.isFinite(nLon)) {
         pts.push([nLon, nLat]);
-      } else {
-        const ref = nd.getAttribute("ref");
-        const hit = ref != null ? nodeMap.get(String(ref)) : undefined;
+      } else if (ref != null) {
+        const hit = nodeMap.get(String(ref));
         if (hit) pts.push(hit);
       }
     }
@@ -87,24 +89,29 @@ function parseOsmXml(text) {
     if (tags.building != null) {
       if (pts.length >= 3) bRaw.push({ id: "w" + id, pts, tags, area: footprintAreaM2(pts) });
     } else if (tags.highway != null) {
-      if (/^(residential|service|footway|steps|pedestrian|path|living_street|unclassified|tertiary|secondary)$/.test(tags.highway))
-        roads.push({ id: "w" + id, pts, name: tags.name ?? null, kind: tags.highway });
+      const hw = tags.highway.split(";")[0].trim();
+      if (/^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|pedestrian|track|busway|footway|path|steps|cycleway|bridleway)(_link)?$/.test(hw)) {
+        if (pts.length >= 2) {
+          const name = tags.name ?? tags["name:tr"] ?? tags.alt_name ?? tags["name:en"] ?? null;
+          roads.push({ id: "w" + id, pts, name, kind: hw, refs });
+        }
+      }
     }
   }
-  // associatedStreet relations carry the name for split member ways.
+  // associatedStreet / street relations carry the name for split member ways.
   const relEls = doc.getElementsByTagName("relation");
   const relNames = new Map();
   for (let i = 0; i < relEls.length; i++) {
     const rel = relEls[i];
-    let type = null;
-    let name = null;
+    const tags = {};
     const tagEls = rel.getElementsByTagName("tag");
     for (let j = 0; j < tagEls.length; j++) {
       const k = tagEls[j].getAttribute("k");
-      if (k === "type") type = tagEls[j].getAttribute("v");
-      if (k === "name") name = tagEls[j].getAttribute("v");
+      if (k != null) tags[k] = tagEls[j].getAttribute("v");
     }
-    if (type === "associatedStreet" && name) {
+    const type = tags.type;
+    const name = tags.name ?? tags["name:tr"] ?? tags.alt_name ?? null;
+    if ((type === "associatedStreet" || type === "street") && name) {
       const memEls = rel.getElementsByTagName("member");
       for (let j = 0; j < memEls.length; j++) {
         if (memEls[j].getAttribute("type") === "way") {
@@ -117,6 +124,29 @@ function parseOsmXml(text) {
   for (const r of roads) {
     if (!r.name && relNames.has(r.id.slice(1))) r.name = relNames.get(r.id.slice(1));
   }
+  const nodeNames = new Map();
+  for (const r of roads) {
+    if (!r.name) continue;
+    for (const n of r.refs) {
+      if (!nodeNames.has(n)) nodeNames.set(n, new Map());
+      const m = nodeNames.get(n);
+      m.set(r.name, (m.get(r.name) ?? 0) + 1);
+    }
+  }
+  for (const r of roads) {
+    if (r.name || /^(footway|steps|path|cycleway)$/.test(r.kind)) continue;
+    const votes = new Map();
+    for (const n of r.refs) {
+      const m = nodeNames.get(n);
+      if (m) for (const [nm, c] of m) votes.set(nm, (votes.get(nm) ?? 0) + c);
+    }
+    const sorted = [...votes.entries()].sort((a, b) => b[1] - a[1]);
+    if (sorted.length && sorted[0][1] >= 2 && (sorted.length < 2 || sorted[0][1] >= 2 * sorted[1][1])) {
+      r.name = sorted[0][0];
+      r.inferred = true;
+    }
+  }
+  for (const r of roads) delete r.refs;
   bRaw.sort((a, b) => b.area - a.area);
   const buildings = bRaw.slice(0, 500).map((b) => {
     let levels = parseNum(b.tags["building:levels"]);
@@ -225,7 +255,7 @@ export async function fetchArea(lat, lon, r = 500) {
         return parseOsmXml(await res.text());
       },
       async () => {
-        const ql = `[out:xml][timeout:30];(way["building"](${s},${w},${n},${e});way["highway"~"^(residential|service|footway|steps|pedestrian|path|living_street|unclassified|tertiary|secondary)$"](${s},${w},${n},${e}););out geom;`;
+        const ql = `[out:xml][timeout:30];(way["building"](${s},${w},${n},${e});way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|pedestrian|track|busway|footway|path|steps|cycleway|bridleway)(_link)?$"](${s},${w},${n},${e}););out geom;`;
         const res = await fetch("https://overpass-api.de/api/interpreter", {
           method: "POST",
           body: ql,

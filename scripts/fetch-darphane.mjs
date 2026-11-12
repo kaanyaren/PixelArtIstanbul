@@ -94,8 +94,11 @@ function parseOsmXml(xml) {
         color: tags["building:colour"] ?? tags.colour ?? tags.color ?? null,
       });
     } else if (tags.highway) {
-      if (/^(residential|service|footway|steps|pedestrian|path|living_street|unclassified|tertiary|secondary)$/.test(tags.highway))
-        roads.push({ id: `w${id}`, pts, name: tags.name ?? null, kind: tags.highway, refs });
+      const hw = tags.highway.split(';')[0].trim();
+      if (/^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|pedestrian|track|busway|footway|path|steps|cycleway|bridleway)(_link)?$/.test(hw)) {
+        const name = tags.name ?? tags["name:tr"] ?? tags.alt_name ?? tags["name:en"] ?? null;
+        roads.push({ id: `w${id}`, pts, name, kind: hw, refs });
+      }
     }
   }
   // associatedStreet relations: street name lives on the relation, not the ways.
@@ -104,9 +107,10 @@ function parseOsmXml(xml) {
     const body = m[1];
     const tags = {};
     for (const t of body.matchAll(/<tag\b[^>]*k="([^"]+)"[^>]*v="([^"]*)"/g)) tags[t[1]] = t[2];
-    if (tags.type === 'associatedStreet' && tags.name) {
+    const relName = tags.name ?? tags['name:tr'] ?? tags.alt_name;
+    if ((tags.type === 'associatedStreet' || tags.type === 'street') && relName) {
       for (const w of body.matchAll(/<member\b[^>]*type="way"[^>]*ref="(-?\d+)"/g)) {
-        if (!relNames.has(w[1])) relNames.set(w[1], tags.name);
+        if (!relNames.has(w[1])) relNames.set(w[1], relName);
       }
     }
   }
@@ -129,7 +133,7 @@ function parseOsmXml(xml) {
     }
   }
   for (const r of roads) {
-    if (r.name || r.kind === 'footway' || r.kind === 'steps' || r.kind === 'path') continue;
+    if (r.name || r.kind === 'footway' || r.kind === 'steps' || r.kind === 'path' || r.kind === 'cycleway') continue;
     const votes = new Map();
     for (const n of r.refs) {
       const m = nodeNames.get(n);

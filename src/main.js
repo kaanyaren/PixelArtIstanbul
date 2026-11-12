@@ -3,6 +3,7 @@ import { cartToIso } from './iso.js';
 import { PAL, mulberry32, hashStr, drawBuilding, drawTree } from './look.js';
 import { spawnCats, spawnCars, spawnPeople, spawnGulls, updateNPCs } from './npcs.js';
 import { areaFromURL, gotoArea, fetchArea } from './area.js';
+import { SETTINGS, loadSettings, saveSettings, resetSettings } from './settings.js';
 
 const PX_M = 8; // vertical pixels per meter of height
 const OX = 400;
@@ -82,6 +83,22 @@ function wireAreaPicker() {
   if (home) home.addEventListener('click', () => {
     window.location.search = '';
   });
+  const searchInput = document.getElementById('area-search-input');
+  const searchBtn = document.getElementById('area-search-btn');
+  const doSearch = () => {
+    const q = (searchInput?.value || '').trim();
+    if (!q) return;
+    fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q.includes('Istanbul') || q.includes('İstanbul') ? q : q + ', Istanbul'))
+      .then((r) => r.json())
+      .then((res) => {
+        if (!res?.[0] || !areaMap || !areaMarker) return;
+        areaMap.setView([parseFloat(res[0].lat), parseFloat(res[0].lon)], 16);
+        areaMarker.setLatLng([parseFloat(res[0].lat), parseFloat(res[0].lon)]);
+      })
+      .catch(() => {});
+  };
+  if (searchBtn) searchBtn.addEventListener('click', doSearch);
+  if (searchInput) searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
 }
 
 class MainScene extends Phaser.Scene {
@@ -94,7 +111,9 @@ class MainScene extends Phaser.Scene {
     this.cartY = 20;
     this.velX = 0;
     this.velY = 0;
-    this.speed = 14; // meters per second
+    this.cfg = loadSettings();
+    this.speed = this.cfg.speed; // meters per second
+    this.labelObjects = [];
     this.walkPhase = 0;
     this.bboxes = [];
     this.cursors = this.input.keyboard.createCursorKeys();
@@ -107,14 +126,14 @@ class MainScene extends Phaser.Scene {
       cam.setZoom(z);
     });
 
-    this.paintSky();
+    this.applyTimeOfDay();
 
     wireAreaPicker();
     const a = areaFromURL();
     if (a) {
       const loading = document.getElementById('area-loading');
       if (loading) loading.style.display = 'block';
-      fetchArea(a.lat, a.lon)
+      fetchArea(a.lat, a.lon, this.cfg.radius)
         .then((data) => {
           if (loading) loading.style.display = 'none';
           this.buildWorld(data);
@@ -140,8 +159,18 @@ class MainScene extends Phaser.Scene {
     }
   }
 
-  // Warm daylight sky: fixed bands top #FFE9C4 -> horizon #FFD9A8.
-  paintSky() {
+  // Sky bands top -> horizon, per time of day.
+  paintSky(tone = 'day') {
+    const PALETTES = {
+      day: [0xffe9c4, 0xffd9a8],
+      golden: [0xffc98a, 0xf79b5c],
+      night: [0x1e2a46, 0x2b3a5c],
+    };
+    const [top, bottom] = PALETTES[tone] || PALETTES.day;
+    if (this.skyG) {
+      this.skyG.destroy();
+      this.skyG = null;
+    }
     const g = this.add.graphics();
     g.setScrollFactor(0);
     g.setDepth(-1000);
@@ -150,12 +179,49 @@ class MainScene extends Phaser.Scene {
     const N = 14;
     for (let i = 0; i < N; i++) {
       const t = i / (N - 1);
-      const r = lerpInt(0xff, 0xff, t);
-      const gg = lerpInt(0xe9, 0xd9, t);
-      const b = lerpInt(0xc4, 0xa8, t);
+      const r = lerpInt((top >> 16) & 0xff, (bottom >> 16) & 0xff, t);
+      const gg = lerpInt((top >> 8) & 0xff, (bottom >> 8) & 0xff, t);
+      const b = lerpInt(top & 0xff, bottom & 0xff, t);
       g.fillStyle((r << 16) | (gg << 8) | b, 1);
       g.fillRect(0, Math.floor((i * H) / N), W, Math.ceil(H / N) + 1);
     }
+    this.skyG = g;
+  }
+
+  // Rebuild sky + camera-fixed tint for the current cfg.timeOfDay.
+  applyTimeOfDay() {
+    const tone = (this.cfg && this.cfg.timeOfDay) || 'day';
+    this.paintSky(tone);
+    if (this.skyOverlay) {
+      this.skyOverlay.destroy();
+      this.skyOverlay = null;
+    }
+    const TINTS = {
+      day: [0xffffff, 0],
+      golden: [0xffd2a8, 1],
+      night: [0x5566a0, 1],
+    };
+    const [color, alpha] = TINTS[tone] || TINTS.day;
+    this.skyOverlay = this.add
+      .rectangle(0, 0, 800, 600, color)
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(40000)
+      .setAlpha(alpha);
+    if (alpha > 0 && tone !== 'day') {
+      this.skyOverlay.setBlendMode(Phaser.BlendModes.MULTIPLY);
+    }
+
+    const UI = {
+      day: { bg: '#F5DFB8', fg: '#5A4632' },
+      golden: { bg: '#F3D0A4', fg: '#5A4632' },
+      night: { bg: '#101A2E', fg: '#EBD9B4' },
+    };
+    const ui = UI[tone] || UI.day;
+    document.body.style.background = ui.bg;
+    document.querySelectorAll('#select, #hud').forEach((el) => {
+      el.style.color = ui.fg;
+    });
   }
 
   buildWorld(data) {
@@ -288,8 +354,8 @@ class MainScene extends Phaser.Scene {
 
     // Street furniture + labels (read road.name / road.kind where road is object).
     {
-      const lampKinds = new Set(['tertiary', 'secondary', 'residential']);
-      const crossKinds = new Set(['tertiary', 'secondary', 'primary', 'residential']);
+      const lampKinds = new Set(['primary', 'trunk', 'secondary', 'tertiary', 'residential', 'living_street', 'unclassified']);
+      const crossKinds = new Set(['primary', 'secondary', 'tertiary', 'residential', 'living_street', 'unclassified']);
       const labelCands = [];
       roadLines.forEach((line, ri) => {
         const meta = roadMeta[ri] || { name: null, kind: null };
@@ -368,7 +434,7 @@ class MainScene extends Phaser.Scene {
           }
         }
         // Street name label candidate: keep full screen polyline; placed near player later.
-        if (meta.name && screenLen > 120) {
+        if (meta.name && screenLen > 50) {
           labelCands.push({ name: meta.name, scr });
         }
       });
@@ -531,7 +597,7 @@ class MainScene extends Phaser.Scene {
 
     this.syncPlayer();
     this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
-    this.cameras.main.setZoom(1.2);
+    this.cameras.main.setZoom(this.cfg.zoom);
     this.npcCenter = { x: this.player.x, y: this.player.y };
     // On-screen D-pad (hold to walk) + zoom buttons.
     {
@@ -565,7 +631,7 @@ class MainScene extends Phaser.Scene {
       if (zo) zo.addEventListener('click', () => zoomBy(0.8));
     }
     // Street name labels at road points nearest the player (max 12, within 700px).
-    {
+    if (this.cfg.labels) {
       const px = this.player.x;
       const py = this.player.y;
       const placed = [];
@@ -603,7 +669,7 @@ class MainScene extends Phaser.Scene {
         let ang = c.ang;
         if (ang > Math.PI / 2) ang -= Math.PI;
         if (ang < -Math.PI / 2) ang += Math.PI;
-        this.add
+        const label = this.add
           .text(c.x, c.y - 10, c.name, {
             fontFamily: 'monospace',
             fontSize: '11px',
@@ -613,13 +679,145 @@ class MainScene extends Phaser.Scene {
           })
           .setOrigin(0.5)
           .setRotation(ang)
-          .setDepth(c.x + c.y + 15000);
+          .setDepth(c.x + c.y + 15000)
+          .setVisible(!!this.cfg.labels);
+        this.labelObjects.push(label);
       }
     }
-    spawnCats(this, 8);
-    spawnCars(this, 5);
-    spawnPeople(this, 6);
-    spawnGulls(this, 5);
+    spawnCats(this, Math.round(8 * this.cfg.life));
+    spawnCars(this, Math.round(5 * this.cfg.life));
+    spawnPeople(this, Math.round(6 * this.cfg.life));
+    spawnGulls(this, Math.round(5 * this.cfg.life));
+    this.buildSettingsUI();
+  }
+
+  // Settings dialog: rows built from SETTINGS, live-applied where possible.
+  buildSettingsUI() {
+    const open = document.getElementById('settings-open');
+    const modal = document.getElementById('settings-modal');
+    const rowsEl = document.getElementById('settings-rows');
+    if (!open || !modal || !rowsEl) return;
+    this._ui = { open, modal, rowsEl };
+    this.renderSettingsRows();
+    if (open.dataset.wired) return;
+    open.dataset.wired = '1';
+    open.addEventListener('click', () => {
+      this.renderSettingsRows();
+      modal.style.display = 'block';
+    });
+    const closeBtn = document.getElementById('settings-close');
+    if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
+    const applyBtn = document.getElementById('settings-apply');
+    if (applyBtn) {
+      applyBtn.addEventListener('click', () => {
+        this.cfg = saveSettings(this.cfg);
+        modal.style.display = 'none';
+      });
+    }
+    const resetBtn = document.getElementById('settings-reset');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        this.cfg = resetSettings();
+        this.cfg = saveSettings(this.cfg);
+        this.renderSettingsRows();
+        this.applyLiveSetting('speed');
+        this.applyLiveSetting('zoom');
+        this.applyTimeOfDay();
+        this.applyLiveSetting('labels');
+      });
+    }
+    const reloadBtn = document.getElementById('settings-reload');
+    if (reloadBtn) reloadBtn.addEventListener('click', () => { window.location.reload(); });
+  }
+
+  renderSettingsRows() {
+    const rowsEl = this._ui && this._ui.rowsEl;
+    if (!rowsEl || !this.cfg) return;
+    rowsEl.textContent = '';
+    for (const spec of SETTINGS) {
+      const value = this.cfg[spec.key];
+      const row = document.createElement('div');
+      row.className = 'set-row';
+      const label = document.createElement('label');
+      label.textContent = spec.label;
+      const val = document.createElement('span');
+      val.className = 'set-val';
+      const selectedLabel = spec.type === 'select'
+        ? (spec.options || []).find(([id]) => id === value)
+        : null;
+      val.textContent = spec.type === 'select'
+        ? (selectedLabel ? selectedLabel[1] : String(value))
+        : `${value}${spec.unit || ''}`;
+      row.appendChild(label);
+      row.appendChild(val);
+
+      let control;
+      if (spec.type === 'range') {
+        control = document.createElement('input');
+        control.type = 'range';
+        control.min = String(spec.min);
+        control.max = String(spec.max);
+        control.step = String(spec.step);
+        control.value = String(value);
+        control.addEventListener('input', () => {
+          const v = Number.parseFloat(control.value);
+          this.cfg[spec.key] = v;
+          val.textContent = `${v}${spec.unit || ''}`;
+          this.applyLiveSetting(spec.key);
+          if (spec.reload) this.revealReload();
+        });
+      } else if (spec.type === 'select') {
+        control = document.createElement('select');
+        for (const [id, text] of spec.options || []) {
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = text;
+          control.appendChild(opt);
+        }
+        control.value = String(value);
+        control.addEventListener('change', () => {
+          this.cfg[spec.key] = control.value;
+          const hit = (spec.options || []).find(([id]) => id === control.value);
+          val.textContent = hit ? hit[1] : control.value;
+          this.applyLiveSetting(spec.key);
+          if (spec.reload) this.revealReload();
+        });
+      } else {
+        control = document.createElement('input');
+        control.type = 'checkbox';
+        control.checked = !!value;
+        val.textContent = value ? 'on' : 'off';
+        control.addEventListener('change', () => {
+          this.cfg[spec.key] = control.checked;
+          val.textContent = control.checked ? 'on' : 'off';
+          this.applyLiveSetting(spec.key);
+          if (spec.reload) this.revealReload();
+        });
+      }
+      control.id = `set-${spec.key}`;
+      row.appendChild(control);
+      rowsEl.appendChild(row);
+    }
+  }
+
+  applyLiveSetting(key) {
+    if (!this.cfg) return;
+    if (key === 'speed') {
+      this.speed = this.cfg.speed;
+    } else if (key === 'zoom') {
+      this.cameras.main.setZoom(this.cfg.zoom);
+    } else if (key === 'timeOfDay') {
+      this.applyTimeOfDay();
+    } else if (key === 'labels') {
+      for (const t of this.labelObjects || []) t.setVisible(!!this.cfg.labels);
+    }
+  }
+
+  revealReload() {
+    const note = document.getElementById('settings-reload-note');
+    const btn = document.getElementById('settings-reload');
+    if (note) note.style.display = 'block';
+    if (btn) btn.style.display = 'inline-block';
   }
 
   blocked(nx, ny) {
