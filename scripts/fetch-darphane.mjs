@@ -79,9 +79,35 @@ function parseOsmXml(xml) {
       });
     } else if (tags.highway) {
       if (/^(residential|service|footway|steps|pedestrian|path|living_street|unclassified|tertiary|secondary)$/.test(tags.highway))
-        roads.push({ id: `w${id}`, pts, name: tags.name ?? null, kind: tags.highway });
+        roads.push({ id: `w${id}`, pts, name: tags.name ?? null, kind: tags.highway, refs });
     }
   }
+  // Name propagation: split OSM ways share nodes; unnamed vehicular segments
+  // inherit the name when shared-node votes clearly agree (best >= 2, 2x runner-up).
+  const nodeNames = new Map();
+  for (const r of roads) {
+    if (!r.name) continue;
+    for (const n of r.refs) {
+      if (!nodeNames.has(n)) nodeNames.set(n, new Map());
+      const m = nodeNames.get(n);
+      m.set(r.name, (m.get(r.name) ?? 0) + 1);
+    }
+  }
+  for (const r of roads) {
+    if (r.name || r.kind === 'footway' || r.kind === 'steps' || r.kind === 'path') continue;
+    const votes = new Map();
+    for (const n of r.refs) {
+      const m = nodeNames.get(n);
+      if (m) for (const [nm, c] of m) votes.set(nm, (votes.get(nm) ?? 0) + c);
+    }
+    const sorted = [...votes.entries()].sort((a, b) => b[1] - a[1]);
+    if (sorted.length && sorted[0][1] >= 2 && (sorted.length < 2 || sorted[0][1] >= 2 * sorted[1][1])) {
+      r.name = sorted[0][0];
+      r.inferred = true;
+    }
+    delete r.refs;
+  }
+  for (const r of roads) delete r.refs;
   buildings.sort((a, b) => footprintArea(b.pts) - footprintArea(a.pts));
   return {
     meta: { center: CENTER, bbox: BBOX, source: "OpenStreetMap ODbL" },

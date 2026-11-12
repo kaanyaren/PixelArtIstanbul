@@ -59,6 +59,13 @@ class MainScene extends Phaser.Scene {
     this.bboxes = [];
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D');
+    this.touch = { up: false, down: false, left: false, right: false };
+    // D-pad + zoom buttons (wired in buildWorld; elements live in index.html).
+    this.input.on('wheel', (_p, _o, _dx, dy) => {
+      const cam = this.cameras.main;
+      const z = Math.max(0.6, Math.min(2.6, cam.zoom * (dy > 0 ? 0.9 : 1.12)));
+      cam.setZoom(z);
+    });
 
     this.paintSky();
 
@@ -450,6 +457,37 @@ class MainScene extends Phaser.Scene {
     this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
     this.cameras.main.setZoom(1.2);
     this.npcCenter = { x: this.player.x, y: this.player.y };
+    // On-screen D-pad (hold to walk) + zoom buttons.
+    {
+      const bind = (id, key) => {
+        const el = document.getElementById(id);
+        if (!el || !this.touch) return;
+        const on = (e) => {
+          e.preventDefault();
+          this.touch[key] = true;
+        };
+        const off = (e) => {
+          if (e) e.preventDefault();
+          this.touch[key] = false;
+        };
+        el.addEventListener('pointerdown', on);
+        el.addEventListener('pointerup', off);
+        el.addEventListener('pointerleave', off);
+        el.addEventListener('pointercancel', off);
+      };
+      bind('dpad-up', 'up');
+      bind('dpad-down', 'down');
+      bind('dpad-left', 'left');
+      bind('dpad-right', 'right');
+      const zoomBy = (f) => {
+        const cam = this.cameras.main;
+        cam.setZoom(Math.max(0.6, Math.min(2.6, cam.zoom * f)));
+      };
+      const zi = document.getElementById('zoom-in');
+      const zo = document.getElementById('zoom-out');
+      if (zi) zi.addEventListener('click', () => zoomBy(1.25));
+      if (zo) zo.addEventListener('click', () => zoomBy(0.8));
+    }
     // Street name labels at road points nearest the player (max 12, within 700px).
     {
       const px = this.player.x;
@@ -478,12 +516,12 @@ class MainScene extends Phaser.Scene {
             ba = Math.atan2(vy, vx);
           }
         }
-        if (bd < 700) placed.push({ name: c.name, d: bd, x: bx, y: by, ang: ba });
+        if (bd < 1000) placed.push({ name: c.name, d: bd, x: bx, y: by, ang: ba });
       }
       placed.sort((a, b) => a.d - b.d);
       const shown = [];
       for (const c of placed) {
-        if (shown.length >= 12) break;
+        if (shown.length >= 18) break;
         if (shown.some((s) => Math.hypot(s.x - c.x, s.y - c.y) < 70)) continue;
         shown.push(c);
         let ang = c.ang;
@@ -519,12 +557,17 @@ class MainScene extends Phaser.Scene {
     if (!this.player) return;
     const dt = Math.min(delta / 1000, 0.1);
     updateNPCs(dt);
-    let ix = 0;
-    let iy = 0;
-    if (this.cursors.left.isDown || this.keys.A.isDown) ix -= 1;
-    if (this.cursors.right.isDown || this.keys.D.isDown) ix += 1;
-    if (this.cursors.up.isDown || this.keys.W.isDown) iy -= 1;
-    if (this.cursors.down.isDown || this.keys.S.isDown) iy += 1;
+    // Screen-relative movement: screen-up = cart(-1,-1), screen-right = cart(1,-1).
+    // Arrow keys, WASD and on-screen D-pad all follow the screen, never diagonal drift.
+    const t = this.touch || {};
+    const su =
+      (this.cursors.up.isDown || this.keys.W.isDown || t.up ? 1 : 0) -
+      (this.cursors.down.isDown || this.keys.S.isDown || t.down ? 1 : 0);
+    const sr =
+      (this.cursors.right.isDown || this.keys.D.isDown || t.right ? 1 : 0) -
+      (this.cursors.left.isDown || this.keys.A.isDown || t.left ? 1 : 0);
+    const ix = sr - su;
+    const iy = -su - sr;
     const len = Math.hypot(ix, iy);
     const tx = len > 0 ? (ix / len) * this.speed : 0;
     const ty = len > 0 ? (iy / len) * this.speed : 0;
