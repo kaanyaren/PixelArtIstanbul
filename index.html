@@ -6,15 +6,20 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M0 8 L8 4 L16 8 L16 12 L8 16 L0 12 Z' fill='%23B5432F'/%3E%3C/svg%3E" />
 <title>Fractal Darphane — walkable Istanbul</title>
 <style>
-  html, body { margin: 0; background: #F5DFB8; color: #5A4632; font-family: monospace; }
-  #game canvas { image-rendering: pixelated; display: block; margin: 0 auto; }
-  #hud { text-align: center; font-size: 12px; padding: 6px; color: #5A4632; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #F5DFB8; color: #5A4632; font-family: monospace; }
+  body { display: flex; flex-direction: column; height: 100dvh; }
+  #select { flex: 0 0 auto; }
+  #game { flex: 1 1 auto; position: relative; min-height: 0; }
+  #game canvas { image-rendering: pixelated; display: block; margin: 0; width: 100% !important; height: 100% !important; }
+  #hud { flex: 0 0 auto; text-align: center; font-size: 12px; padding: 6px; color: #5A4632; }
   #select { text-align: center; padding: 8px; color: #5A4632; }
   #select button {
     font-family: monospace; margin: 0 6px; padding: 8px 14px; cursor: pointer;
     background: #FFEDCB; color: #5A4632; border: 2px solid #C9A86A; border-radius: 10px;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
   #select button:hover { background: #FFE3AC; }
+  .walker-btn.active, .tod-btn.active { background: #5A4632 !important; color: #FFEDCB !important; font-weight: bold; border-color: #3e2f22 !important; }
   #touch-ui {
     position: fixed; right: 12px; bottom: 12px; z-index: 50;
     display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px);
@@ -64,9 +69,13 @@
 <body>
 <div id="select">
   <span>Choose walker:</span>
-  <button data-tint="0x4dc26b">Green</button>
-  <button data-tint="0x4d8ac2">Blue</button>
-  <button data-tint="0xc25d4d">Red</button>
+  <button class="walker-btn active" data-tint="0x4dc26b">🟢 Green</button>
+  <button class="walker-btn" data-tint="0x4d8ac2">🔵 Blue</button>
+  <button class="walker-btn" data-tint="0xc25d4d">🔴 Red</button>
+  <span style="margin:0 4px 0 8px;opacity:0.5;">|</span>
+  <button class="tod-btn" data-tod="day">☀️ Day</button>
+  <button class="tod-btn" data-tod="golden">🌅 Golden</button>
+  <button class="tod-btn" data-tod="night">🌙 Night</button>
   <span>WASD / Arrows to move</span>
   <button id="change-area">📍 Change area</button>
   <button id="settings-open" aria-label="Settings">⚙️ Settings</button>
@@ -88,6 +97,7 @@
       <input id="area-search-input" type="text" placeholder="Search street, avenue, or address (e.g. Rami Kışla Caddesi)" style="flex:1;padding:8px 10px;font-family:monospace;background:#FFF7E4;border:2px solid #C9A86A;border-radius:8px;color:#5A4632;" />
       <button id="area-search-btn" style="font-family:monospace;padding:8px 14px;cursor:pointer;background:#5A4632;color:#FFEDCB;border:2px solid #C9A86A;border-radius:8px;">Search</button>
     </div>
+    <div id="area-search-status" style="font-size:11px;opacity:0.8;margin-bottom:6px;">Type any street, avenue or neighborhood in Istanbul and press Search</div>
     <div id="area-map" style="height:60vh;width:100%;border:2px solid #C9A86A;border-radius:8px;"></div>
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
       <button id="area-play" style="font-family:monospace;padding:8px 14px;cursor:pointer;background:#5A4632;color:#FFEDCB;border:2px solid #C9A86A;border-radius:10px;">Play this area</button>

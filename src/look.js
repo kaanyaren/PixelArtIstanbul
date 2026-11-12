@@ -218,7 +218,8 @@ export function drawBuilding(g, base, opts = {}) {
   const longA = Math.hypot(pB.x - pF.x, pB.y - pF.y) >= Math.hypot(pA.x - pF.x, pA.y - pF.y);
   const Q = longA ? pB : pA, tQ = longA ? tB : tA;
 
-  if (rng() < 0.4 && floors >= 2) {
+  const hasBalcony = floors >= 2 && rng() < 0.4;
+  if (hasBalcony) {
     // Balcony on longer front face, middle floor.
     const mf = Math.max(1, Math.ceil(floors / 2));
     const c = wallPoint(pF, Q, tF, tQ, 0.5, mf / (floors + 0.6));
@@ -230,6 +231,30 @@ export function drawBuilding(g, base, opts = {}) {
     g.fillRect(c.x - 13, c.y + 5, 26, 3);
     g.fillStyle(0x2E3A44, 1);
     for (let b = -1; b <= 1; b++) g.fillRect(c.x + b * 8 - 1, c.y - 1, 2, 6);
+    if (rng() < 0.3) {
+      g.fillStyle(0xC92A2A, 1);
+      g.fillRect(c.x - 4, c.y - 1, 8, 6);
+      g.fillStyle(0xFFFFFF, 1);
+      g.fillRect(c.x - 1, c.y + 1, 1, 1);
+    }
+  } else if (floors >= 2 && rng() < 0.3) {
+    const c = wallPoint(pF, Q, tF, tQ, 0.5, 2 / (floors + 0.6));
+    g.fillStyle(0x4A3226, 1);
+    g.fillRect(c.x - 6, c.y + 7, 3, 4);
+    g.fillRect(c.x + 3, c.y + 7, 3, 4);
+    g.fillStyle(0x6B4A30, 1);
+    g.fillRect(c.x - 9, c.y - 7, 18, 14);
+    g.fillStyle(PAL.trim, 1);
+    g.fillRect(c.x - 7, c.y - 5, 6, 9);
+    g.fillRect(c.x + 1, c.y - 5, 6, 9);
+    g.fillStyle(PAL.glass, 1);
+    g.fillRect(c.x - 6, c.y - 4, 4, 7);
+    g.fillRect(c.x + 2, c.y - 4, 4, 7);
+    g.fillStyle(PAL.trim, 1);
+    g.fillRect(c.x - 6, c.y, 4, 1);
+    g.fillRect(c.x + 2, c.y, 4, 1);
+    g.fillStyle(PAL.roofFace, 1);
+    g.fillRect(c.x - 10, c.y - 9, 20, 2);
   }
 
   if (rng() < 0.3) {
@@ -247,6 +272,7 @@ export function drawBuilding(g, base, opts = {}) {
   }
 
   const isShop = rng() < 0.35;
+  const d = wallPoint(pF, Q, tF, tQ, 0.5, 0.0);
   if (isShop) {
     // Shopfront: colored sign band spanning front face + tiny door + step.
     const band = [0xC0392B, 0x2A9D8F, 0xE67E22, 0x2E5FA3][(rng() * 4) | 0];
@@ -260,14 +286,12 @@ export function drawBuilding(g, base, opts = {}) {
     g.fillRect(Math.min(l.x, r.x), Math.min(l.y, r.y) - 3, Math.abs(r.x - l.x), 6);
     g.fillStyle(0xF7F2E7, 1);
     g.fillRect(Math.min(l.x, r.x) + 2, Math.min(l.y, r.y) - 2, Math.min(20, Math.abs(r.x - l.x) / 3), 4);
-    const d = wallPoint(pF, Q, tF, tQ, 0.5, 0.0);
     g.fillStyle(0x2E3A44, 1);
     g.fillRect(d.x - 4, d.y - 12, 8, 12);
     g.lineStyle(1, 0xB8B0A0, 1);
     g.lineBetween(d.x - 5, d.y, d.x + 5, d.y);
   } else {
     // Entrance door: centered ground-floor dark wood + steps + 50% canopy.
-    const d = wallPoint(pF, Q, tF, tQ, 0.5, 0.0);
     g.fillStyle(0x4A3226, 1);
     g.fillRect(d.x - 4, d.y - 13, 8, 13);
     g.fillStyle(0x6B4A30, 1);
@@ -279,6 +303,17 @@ export function drawBuilding(g, base, opts = {}) {
       g.fillStyle(shade(fc, 0.7), 1);
       g.fillRect(d.x - 7, d.y - 16, 14, 3);
     }
+  }
+
+  const potSides = rng() < 0.5 ? [-1, 1] : [rng() < 0.5 ? -1 : 1];
+  for (const s of potSides) {
+    const px = s < 0 ? d.x - 9 : d.x + 7;
+    g.fillStyle(0xC25D38, 1);
+    g.fillRect(px, d.y - 3, 3, 3);
+    g.fillStyle(0x4E7A52, 1);
+    g.fillRect(px, d.y - 5, 3, 2);
+    g.fillStyle(0xD43B3B, 1);
+    g.fillRect(px + 1, d.y - 6, 1, 1);
   }
 
   if (rng() < 0.3) {
@@ -309,8 +344,9 @@ export function drawBuilding(g, base, opts = {}) {
 
 export function drawTree(g, x, y, seed, s = 1) {
   const rng = mulberry32(typeof seed === "number" ? seed : hashStr(String(seed)));
+  const roll = rng();
   ell(g, x, y + 2 * s, 10 * s, 3.5 * s, 0x3A2A20, 0.15);
-  if (rng() < 0.2) {
+  if (roll < 0.22) {
     // Cypress: thin dark column, very Istanbul.
     g.fillStyle(0x2E4A2E, 1);
     g.fillRect(x - 3 * s, y - 34 * s, 6 * s, 34 * s);
@@ -322,6 +358,27 @@ export function drawTree(g, x, y, seed, s = 1) {
     );
     return;
   }
+  if (roll < 0.45) {
+    // Erguvan (Judas tree in bloom): magenta-pink flowering canopy.
+    g.fillStyle(0x5A3E26, 1);
+    g.fillRect(x - 2 * s, y - 16 * s, 4 * s, 16 * s);
+    blob(g, x - 7 * s, y - 17 * s, 7.5 * s, 0xB8326E, rng);
+    blob(g, x + 7 * s, y - 17 * s, 7.5 * s, 0xB8326E, rng);
+    blob(g, x, y - 23 * s, 10 * s, 0xD44D88, rng);
+    blob(g, x - 3 * s, y - 25 * s, 4.5 * s, 0xEE7CB2, rng);
+    return;
+  }
+  if (roll < 0.72) {
+    // Çınar (Plane tree): wide majestic spreading canopy with sturdy trunk.
+    g.fillStyle(0x6B4A30, 1);
+    g.fillRect(x - 2.5 * s, y - 18 * s, 5 * s, 18 * s);
+    blob(g, x - 11 * s, y - 18 * s, 8 * s, 0x3E5E3A, rng);
+    blob(g, x + 11 * s, y - 18 * s, 8 * s, 0x3E5E3A, rng);
+    blob(g, x, y - 24 * s, 12 * s, 0x5C8054, rng);
+    blob(g, x - 4 * s, y - 27 * s, 6 * s, 0x82A876, rng);
+    return;
+  }
+  // Classic Mediterranean stone pine / olive green shade tree.
   g.fillStyle(0x7A5230, 1);
   g.fillRect(x - 2 * s, y - 15 * s, 4 * s, 15 * s);
   blob(g, x - 7 * s, y - 16 * s, 7 * s, 0x4E7A52, rng);

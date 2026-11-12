@@ -11,7 +11,7 @@ const CAT_DEFS = [
   { name: 'tuxedo', body: 0x2b2b2e, stripe: 0x101012, tail: 0x2b2b2e, ear: 0x2b2b2e, chest: 0xffffff },
 ];
 const CAT_EYE = 0x27b34e, CAT_NOSE = 0xe87f9a;
-const CAR_DEFS = [{ name: 'white', body: 0xf2f2f2 }, { name: 'red', body: 0xc93a3a }, { name: 'navy', body: 0x2a3f66 }, { name: 'taxi', body: 0xf2c230 }];
+const CAR_DEFS = [{ name: 'white', body: 0xf2f2f2 }, { name: 'red', body: 0xc93a3a }, { name: 'navy', body: 0x2a3f66 }, { name: 'taxi', body: 0xf2c230 }, { name: 'dolmus', body: 0xf4b41a }];
 const SHIRTS = [0xc94f4f, 0x4f7ac9, 0x53a05a, 0x8a5ac9, 0xd98a3d, 0x3bb8a6, 0xe2e2e2, 0x30303a];
 const SKIN = 0xe8b88a, PANTS = 0x2e3440;
 const DEFAULT_ROADS = [[{ x: 16, y: 120 }, { x: 784, y: 120 }, { x: 784, y: 184 }, { x: 16, y: 184 }], [{ x: 16, y: 400 }, { x: 784, y: 400 }, { x: 784, y: 464 }, { x: 16, y: 464 }]];
@@ -163,8 +163,35 @@ function ensureGullTextures(scene) {
     g.generateTexture(key, 6, 3); g.destroy(); nearest(scene, key);
   }
 }
+export function ensureSimitciTexture(scene) {
+  if (scene.textures.exists('npc-simitci')) return;
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  g.fillStyle(0x000000, 0.25); g.fillEllipse(7, 13.5, 12, 2.4);
+  g.fillStyle(0xb8923a, 1); g.fillRect(3, 11, 3, 3); g.fillRect(10, 11, 3, 3);
+  g.fillStyle(0xb53026, 1); g.fillRect(2, 7, 11, 4);
+  g.fillStyle(0xffffff, 1); g.fillRect(2, 10, 11, 1);
+  g.fillStyle(0xd0e8f2, 1); g.fillRect(3, 4, 9, 3);
+  g.fillStyle(0xc2853d, 1); g.fillRect(4, 5, 1, 1); g.fillRect(7, 5, 1, 1); g.fillRect(10, 5, 1, 1);
+  for (let x = 1; x <= 13; x++) {
+    g.fillStyle(x % 2 === 1 ? 0xb53026 : 0xffffff, 1);
+    g.fillRect(x, 1, 1, 3);
+  }
+  g.fillStyle(0xe5c158, 1); g.fillRect(7, 0, 1, 1);
+  g.generateTexture('npc-simitci', 14, 14); g.destroy(); nearest(scene, 'npc-simitci');
+}
+export function ensureDogTexture(scene) {
+  if (scene.textures.exists('npc-dog')) return;
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  g.fillStyle(0x000000, 0.2); g.fillEllipse(7, 7.4, 12, 1.2);
+  g.fillStyle(0xd2a466, 1); g.fillRect(2, 3, 10, 5); g.fillRect(1, 4, 2, 2);
+  g.fillStyle(0x8a6036, 1); g.fillRect(11, 4, 3, 2); g.fillRect(9, 2, 2, 2);
+  g.fillStyle(0x111111, 1); g.fillRect(13, 4, 1, 1);
+  g.fillStyle(0x36a9e1, 1); g.fillRect(9, 1, 1, 1);
+  g.generateTexture('npc-dog', 14, 8); g.destroy(); nearest(scene, 'npc-dog');
+}
 export function spawnCats(scene, count) {
   ensureCatTextures(scene);
+  ensureDogTexture(scene);
   const bounds = getBounds(scene), n = Math.max(0, Math.floor(count || 0));
   for (let i = 0; i < n; i++) {
     const ci = Math.floor(Math.random() * CAT_DEFS.length), sitting = Math.random() < 0.3;
@@ -174,9 +201,23 @@ export function spawnCats(scene, count) {
     const t = pickTile(x, y, bounds, CAT_TILE);
     cats.push({ sprite, bounds, ci, frame: sitting ? 0 : 1, wag: randBetween(0, WAG_TIME), sitting, tx: t.x, ty: t.y, timer: randBetween(1, 3) });
   }
+  const roads = clampRoads(getRoads(scene), bounds);
+  const dogCount = 2 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < dogCount; i++) {
+    let x = randBetween(bounds.x0, bounds.x1), y = randBetween(bounds.y0, bounds.y1);
+    if (roads.length > 0) {
+      const pts = roads[i % roads.length], p = pts[Math.floor(Math.random() * pts.length)];
+      x = Math.min(Math.max(p.x + randBetween(-30, 30), bounds.x0), bounds.x1);
+      y = Math.min(Math.max(p.y + (Math.random() < 0.5 ? -14 : 14), bounds.y0), bounds.y1);
+    }
+    const sprite = scene.add.image(x, y, 'npc-dog');
+    sprite.setDepth(x + y + 20000);
+    if (Math.random() < 0.5) sprite.setFlipX(true);
+  }
 }
 export function spawnCars(scene, count) {
   ensureCarTextures(scene);
+  ensureSimitciTexture(scene);
   const bounds = getBounds(scene), roads = clampRoads(getRoads(scene), bounds);
   if (roads.length === 0) return;
   const n = Math.max(0, Math.floor(count || 0)), parked = Math.floor(n / 2);
@@ -194,6 +235,14 @@ export function spawnCars(scene, count) {
       sprite.setDepth(pts[seg].y + 20000);
       cars.push({ sprite, pts, seg, speed: CAR_SPEED, parked: false });
     }
+  }
+  const cartCount = 1 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < cartCount; i++) {
+    const pts = roads[i % roads.length], p = pts[Math.floor(Math.random() * pts.length)];
+    const x = Math.min(Math.max(p.x + randBetween(-20, 20), bounds.x0), bounds.x1);
+    const y = Math.min(Math.max(p.y + (Math.random() < 0.5 ? -10 : 10), bounds.y0), bounds.y1);
+    const sprite = scene.add.image(x, y, 'npc-simitci');
+    sprite.setDepth(y + 20000);
   }
 }
 export function spawnPeople(scene, count) {

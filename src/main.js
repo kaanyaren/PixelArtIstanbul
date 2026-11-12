@@ -19,8 +19,11 @@ const FALLBACK = {
 
 let playerTint = 0x4dc26b;
 
-document.querySelectorAll('#select button').forEach((btn) => {
+const walkerBtns = document.querySelectorAll('.walker-btn');
+walkerBtns.forEach((btn) => {
   btn.addEventListener('click', () => {
+    walkerBtns.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
     playerTint = Number(btn.dataset.tint);
     window.__playerTint = playerTint;
   });
@@ -85,17 +88,25 @@ function wireAreaPicker() {
   });
   const searchInput = document.getElementById('area-search-input');
   const searchBtn = document.getElementById('area-search-btn');
+  const searchStatus = document.getElementById('area-search-status');
   const doSearch = () => {
     const q = (searchInput?.value || '').trim();
     if (!q) return;
+    if (searchStatus) searchStatus.textContent = 'Searching OpenStreetMap…';
     fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q.includes('Istanbul') || q.includes('İstanbul') ? q : q + ', Istanbul'))
       .then((r) => r.json())
       .then((res) => {
-        if (!res?.[0] || !areaMap || !areaMarker) return;
+        if (!res?.[0] || !areaMap || !areaMarker) {
+          if (searchStatus) searchStatus.textContent = 'Address not found. Try street name or neighborhood.';
+          return;
+        }
         areaMap.setView([parseFloat(res[0].lat), parseFloat(res[0].lon)], 16);
         areaMarker.setLatLng([parseFloat(res[0].lat), parseFloat(res[0].lon)]);
+        if (searchStatus) searchStatus.textContent = 'Found: ' + res[0].display_name.slice(0, 50) + '…';
       })
-      .catch(() => {});
+      .catch(() => {
+        if (searchStatus) searchStatus.textContent = 'Address not found. Try street name or neighborhood.';
+      });
   };
   if (searchBtn) searchBtn.addEventListener('click', doSearch);
   if (searchInput) searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
@@ -127,6 +138,21 @@ class MainScene extends Phaser.Scene {
     });
 
     this.applyTimeOfDay();
+    this.scale.on('resize', () => this.applyTimeOfDay());
+
+    const todBtns = document.querySelectorAll('.tod-btn');
+    const updateTodActive = () => {
+      todBtns.forEach((b) => b.classList.toggle('active', b.dataset.tod === this.cfg.timeOfDay));
+    };
+    updateTodActive();
+    todBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.cfg.timeOfDay = btn.dataset.tod;
+        updateTodActive();
+        this.applyTimeOfDay();
+        saveSettings(this.cfg);
+      });
+    });
 
     wireAreaPicker();
     const a = areaFromURL();
@@ -174,8 +200,8 @@ class MainScene extends Phaser.Scene {
     const g = this.add.graphics();
     g.setScrollFactor(0);
     g.setDepth(-1000);
-    const W = 800;
-    const H = 600;
+    const W = this.scale.width || 800;
+    const H = this.scale.height || 600;
     const N = 14;
     for (let i = 0; i < N; i++) {
       const t = i / (N - 1);
@@ -191,6 +217,9 @@ class MainScene extends Phaser.Scene {
   // Rebuild sky + camera-fixed tint for the current cfg.timeOfDay.
   applyTimeOfDay() {
     const tone = (this.cfg && this.cfg.timeOfDay) || 'day';
+    document.querySelectorAll('.tod-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.tod === tone);
+    });
     this.paintSky(tone);
     if (this.skyOverlay) {
       this.skyOverlay.destroy();
@@ -202,8 +231,10 @@ class MainScene extends Phaser.Scene {
       night: [0x5566a0, 1],
     };
     const [color, alpha] = TINTS[tone] || TINTS.day;
+    const W = this.scale.width || 800;
+    const H = this.scale.height || 600;
     this.skyOverlay = this.add
-      .rectangle(0, 0, 800, 600, color)
+      .rectangle(0, 0, W, H, color)
       .setOrigin(0)
       .setScrollFactor(0)
       .setDepth(40000)
@@ -211,6 +242,8 @@ class MainScene extends Phaser.Scene {
     if (alpha > 0 && tone !== 'day') {
       this.skyOverlay.setBlendMode(Phaser.BlendModes.MULTIPLY);
     }
+    const BG = { day: '#FFD9A8', golden: '#F79B5C', night: '#1E2A46' };
+    this.cameras.main.setBackgroundColor(BG[tone] || BG.day);
 
     const UI = {
       day: { bg: '#F5DFB8', fg: '#5A4632' },
@@ -325,32 +358,118 @@ class MainScene extends Phaser.Scene {
       }
     }
 
-    // Streets: cobble #9A9184 with sidewalk borders #D8CCB4 + center dashes.
-    for (const line of roadLines) {
+    // Streets: differentiated by road kind.
+    const drivable = new Set(['primary', 'trunk', 'motorway', 'secondary', 'tertiary', 'residential']);
+    const roadStyles = roadLines.map((_, ri) => {
+      const kind = roadMeta[ri]?.kind;
+      if (kind === 'steps') return { baseW: 8, surfW: 6, surfCol: 0xbaa992, type: 'steps' };
+      if (kind === 'footway' || kind === 'pedestrian' || kind === 'path') return { baseW: 8, surfW: 6, surfCol: 0xbfae97, type: 'walkway' };
+      if (kind === 'primary' || kind === 'trunk' || kind === 'motorway') return { baseW: 22, surfW: 17, surfCol: 0x55524e, dashStep: 2.5, dashCol: 0xf0d060, dual: true, type: 'road' };
+      if (kind === 'secondary' || kind === 'tertiary') return { baseW: 16, surfW: 12, surfCol: 0x767068, dashStep: 2, dashCol: 0xf5ead0, dual: false, type: 'road' };
+      return { baseW: 13, surfW: 9, surfCol: 0x9a9184, dashStep: 2, dashCol: 0xf5ead0, dual: false, type: 'road' };
+    });
+
+    const roadScr = roadLines.map((line) => line.map(([x, y]) => toScreen(x, y)));
+
+    // 1. Sidewalk base pass
+    roadLines.forEach((line, ri) => {
+      g.lineStyle(roadStyles[ri].baseW, 0xd8ccb4, 1);
+      const scr = roadScr[ri];
       for (let i = 0; i + 1 < line.length; i++) {
-        const a = toScreen(line[i][0], line[i][1]);
-        const b = toScreen(line[i + 1][0], line[i + 1][1]);
-        g.lineStyle(14, 0xd8ccb4, 1);
-        g.lineBetween(a.x, a.y, b.x, b.y);
-        g.lineStyle(10, 0x9a9184, 1);
-        g.lineBetween(a.x, a.y, b.x, b.y);
+        g.lineBetween(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
       }
-      // Center dashes every ~2m, 1m long.
+    });
+
+    // 2. Road surface pass
+    roadLines.forEach((line, ri) => {
+      const s = roadStyles[ri];
+      g.lineStyle(s.surfW, s.surfCol, 1);
+      const scr = roadScr[ri];
       for (let i = 0; i + 1 < line.length; i++) {
-        const [ax, ay] = line[i];
-        const [bx, by] = line[i + 1];
-        const segLen = Math.hypot(bx - ax, by - ay);
-        if (segLen < 0.5) continue;
-        g.lineStyle(2, 0xf5ead0, 1);
-        for (let d = 0; d < segLen; d += 2) {
-          const t0 = d / segLen;
-          const t1 = Math.min(1, (d + 1) / segLen);
-          const p0 = toScreen(ax + (bx - ax) * t0, ay + (by - ay) * t0);
-          const p1 = toScreen(ax + (bx - ax) * t1, ay + (by - ay) * t1);
-          g.lineBetween(p0.x, p0.y, p1.x, p1.y);
+        g.lineBetween(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
+      }
+    });
+
+    // 3. Markings, step treads & manhole covers
+    roadLines.forEach((line, ri) => {
+      const s = roadStyles[ri];
+      const kind = roadMeta[ri]?.kind;
+      const scr = roadScr[ri];
+
+      if (s.type === 'steps') {
+        g.lineStyle(2, 0x5a4f42, 1);
+        for (let i = 0; i + 1 < line.length; i++) {
+          const segLen = Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]);
+          if (segLen < 0.5) continue;
+          const a = scr[i];
+          const b = scr[i + 1];
+          const sdx = b.x - a.x;
+          const sdy = b.y - a.y;
+          const slen = Math.hypot(sdx, sdy);
+          if (slen < 1) continue;
+          const nx = -sdy / slen;
+          const ny = sdx / slen;
+          for (let d = 0; d < segLen; d += 1.5) {
+            const t = d / segLen;
+            const px = a.x + sdx * t;
+            const py = a.y + sdy * t;
+            g.lineBetween(px - nx * 2, py - ny * 2, px + nx * 2, py + ny * 2);
+          }
+        }
+      } else if (s.type === 'road') {
+        g.lineStyle(2, s.dashCol, 1);
+        for (let i = 0; i + 1 < line.length; i++) {
+          const segLen = Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]);
+          if (segLen < 0.5) continue;
+          const a = scr[i];
+          const b = scr[i + 1];
+          const sdx = b.x - a.x;
+          const sdy = b.y - a.y;
+          const slen = Math.hypot(sdx, sdy);
+          if (slen < 1) continue;
+          const nx = -sdy / slen;
+          const ny = sdx / slen;
+          const dashLen = s.dual ? 1.2 : 1;
+          for (let d = 0; d < segLen; d += s.dashStep) {
+            const t0 = d / segLen;
+            const t1 = Math.min(1, (d + dashLen) / segLen);
+            const p0x = a.x + sdx * t0;
+            const p0y = a.y + sdy * t0;
+            const p1x = a.x + sdx * t1;
+            const p1y = a.y + sdy * t1;
+            if (s.dual) {
+              g.lineBetween(p0x + nx * 1.5, p0y + ny * 1.5, p1x + nx * 1.5, p1y + ny * 1.5);
+              g.lineBetween(p0x - nx * 1.5, p0y - ny * 1.5, p1x - nx * 1.5, p1y - ny * 1.5);
+            } else {
+              g.lineBetween(p0x, p0y, p1x, p1y);
+            }
+          }
         }
       }
-    }
+
+      if (drivable.has(kind)) {
+        let cartLen = 0;
+        const cum = [0];
+        for (let i = 0; i + 1 < line.length; i++) {
+          cartLen += Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]);
+          cum.push(cartLen);
+        }
+        for (let s = 27.5; s < cartLen; s += 55) {
+          let seg = 0;
+          while (seg + 1 < cum.length - 1 && cum[seg + 1] < s) seg++;
+          const sLen = cum[seg + 1] - cum[seg] || 1;
+          const t = (s - cum[seg]) / sLen;
+          const a = scr[seg];
+          const b = scr[seg + 1];
+          const px = a.x + (b.x - a.x) * t;
+          const py = a.y + (b.y - a.y) * t;
+          g.fillStyle(0x3d3a36, 1);
+          g.fillCircle(px, py, 1.8);
+          g.fillStyle(0x6e6862, 1);
+          g.fillCircle(px, py, 0.8);
+        }
+      }
+    });
 
     // Street furniture + labels (read road.name / road.kind where road is object).
     {
@@ -878,11 +997,15 @@ class MainScene extends Phaser.Scene {
 const config = {
   type: Phaser.AUTO,
   parent: 'game',
-  width: 800,
-  height: 600,
   backgroundColor: '#FFD9A8',
   pixelArt: true,
   roundPixels: true,
+  scale: {
+    mode: Phaser.Scale.RESIZE,
+    parent: 'game',
+    width: window.innerWidth,
+    height: window.innerHeight,
+  },
   scene: [MainScene],
 };
 
