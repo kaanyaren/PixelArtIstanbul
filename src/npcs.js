@@ -4,11 +4,13 @@ let gullTime = 0;
 const CAT_TILE = 10, CAT_SPEED = 12, CAR_SPEED = 24, PERSON_TILE = 12, PERSON_SPEED = 20;
 const WAG_TIME = 0.4, WALK_TIME = 0.25;
 const CAT_DEFS = [
-  { name: 'orange', body: 0xd98a3d, stripe: 0x8a5220 },
-  { name: 'gray', body: 0x8a8f98, stripe: 0x5a5e66 },
-  { name: 'black', body: 0x2b2b2e, stripe: 0x101012 },
-  { name: 'white', body: 0xf5f0e6, stripe: 0xc9c2b2 },
+  { name: 'orange', body: 0xd98a3d, stripe: 0x8a5220, tail: 0xd98a3d, ear: 0xd98a3d },
+  { name: 'gray', body: 0x8a8f98, stripe: 0x5a5e66, tail: 0x8a8f98, ear: 0x8a8f98 },
+  { name: 'black', body: 0x2b2b2e, stripe: 0x101012, tail: 0x2b2b2e, ear: 0x2b2b2e, chest: 0xf5f0e6 },
+  { name: 'white', body: 0xf5f0e6, stripe: 0xc9c2b2, tail: 0xd98a3d, ear: 0xd98a3d },
+  { name: 'tuxedo', body: 0x2b2b2e, stripe: 0x101012, tail: 0x2b2b2e, ear: 0x2b2b2e, chest: 0xffffff },
 ];
+const CAT_EYE = 0x27b34e, CAT_NOSE = 0xe87f9a;
 const CAR_DEFS = [{ name: 'white', body: 0xf2f2f2 }, { name: 'red', body: 0xc93a3a }, { name: 'navy', body: 0x2a3f66 }, { name: 'taxi', body: 0xf2c230 }];
 const SHIRTS = [0xc94f4f, 0x4f7ac9, 0x53a05a, 0x8a5ac9, 0xd98a3d, 0x3bb8a6, 0xe2e2e2, 0x30303a];
 const SKIN = 0xe8b88a, PANTS = 0x2e3440;
@@ -55,20 +57,58 @@ function stepToward(s, tx, ty, speed, dt) {
   s.x += (dx / d) * step; s.y += (dy / d) * step;
   s.setFlipX(dx < 0);
 }
-// 8x7 cat: ears/head/body, 2 tail frames, tabby stripes, shadow ellipse.
+// 12x9 street cat, faces right (flipX for left). f0 sit (tail wrapped along
+// ground), f1 walk-A / f2 walk-B (tail up, 2 sway poses, 4 leg px alternate).
+// Head: 3-wide front face x8-10 y1-3, triangle ear tips y0, green eyes, pink nose.
+function paintCatHead(g, def) {
+  g.fillStyle(def.body, 1);
+  g.fillRect(8, 1, 3, 3);
+  g.fillStyle(def.ear, 1);
+  g.fillRect(8, 0, 1, 1); g.fillRect(10, 0, 1, 1);
+  const tabby = def.name === 'orange' || def.name === 'gray';
+  if (tabby) { g.fillStyle(def.stripe, 1); g.fillRect(9, 1, 1, 1); }
+  if (def.name === 'tuxedo') { g.fillStyle(def.chest, 1); g.fillRect(8, 3, 3, 1); }
+  g.fillStyle(CAT_EYE, 1); g.fillRect(8, 2, 1, 1); g.fillRect(10, 2, 1, 1);
+  g.fillStyle(CAT_NOSE, 1); g.fillRect(9, 3, 1, 1);
+}
+function paintCatWalk(g, def, f) {
+  const B = def.body, tabby = def.name === 'orange' || def.name === 'gray';
+  g.fillStyle(def.tail, 1); // tail curves UP from rear, 2 sway poses
+  if (f === 1) { g.fillRect(0, 3, 1, 4); g.fillRect(1, 2, 1, 1); }
+  else { g.fillRect(0, 5, 1, 2); g.fillRect(1, 3, 1, 2); g.fillRect(2, 2, 1, 1); }
+  g.fillStyle(B, 1); // hindquarters + torso + chest
+  g.fillRect(1, 4, 8, 3);
+  if (tabby) { g.fillStyle(def.stripe, 1); g.fillRect(2, 4, 1, 1); g.fillRect(4, 4, 1, 1); g.fillRect(6, 4, 1, 1); }
+  else if (def.name === 'black' || def.name === 'tuxedo') { g.fillStyle(def.stripe, 1); g.fillRect(3, 4, 1, 1); g.fillRect(5, 4, 1, 1); }
+  if (def.name === 'black') { g.fillStyle(def.chest, 1); g.fillRect(8, 5, 1, 2); }
+  if (def.name === 'tuxedo') { g.fillStyle(def.chest, 1); g.fillRect(7, 5, 2, 2); }
+  paintCatHead(g, def);
+  g.fillStyle(B, 1); // 4 leg px, alternate lift per frame
+  if (f === 1) { g.fillRect(2, 7, 1, 2); g.fillRect(7, 7, 1, 1); g.fillRect(8, 7, 1, 1); }
+  else { g.fillRect(2, 7, 1, 1); g.fillRect(3, 7, 1, 1); g.fillRect(7, 7, 1, 2); }
+  if (def.name === 'tuxedo') { g.fillStyle(def.chest, 1); g.fillRect(2, 8, 1, 1); g.fillRect(7, 8, 1, 1); }
+}
+function paintCatSit(g, def) {
+  const B = def.body, tabby = def.name === 'orange' || def.name === 'gray';
+  g.fillStyle(def.tail, 1); // tail wrapped around side along ground, tip up at chest
+  g.fillRect(1, 8, 6, 1); g.fillRect(7, 7, 1, 1);
+  g.fillStyle(B, 1); // upright torso + haunch
+  g.fillRect(4, 4, 5, 3); g.fillRect(2, 6, 3, 2);
+  if (tabby) { g.fillStyle(def.stripe, 1); g.fillRect(5, 4, 1, 2); g.fillRect(2, 6, 3, 1); }
+  else if (def.name === 'black' || def.name === 'tuxedo') { g.fillStyle(def.stripe, 1); g.fillRect(5, 4, 1, 2); }
+  if (def.name === 'black') { g.fillStyle(def.chest, 1); g.fillRect(7, 5, 2, 2); }
+  if (def.name === 'tuxedo') { g.fillStyle(def.chest, 1); g.fillRect(6, 5, 3, 2); }
+  paintCatHead(g, def);
+  if (def.name === 'tuxedo') { g.fillStyle(def.chest, 1); g.fillRect(5, 7, 1, 1); g.fillRect(6, 7, 1, 1); }
+}
 function ensureCatTextures(scene) {
-  for (const def of CAT_DEFS) for (let f = 0; f < 2; f++) {
+  for (const def of CAT_DEFS) for (let f = 0; f < 3; f++) {
     const key = `npc-cat-${def.name}-${f}`;
     if (scene.textures.exists(key)) continue;
     const g = scene.make.graphics({ x: 0, y: 0, add: false });
-    g.fillStyle(0x000000, 0.28); g.fillEllipse(4, 6.3, 6, 1.4);
-    g.fillStyle(def.body, 1);
-    g.fillRect(1, 0, 1, 1); g.fillRect(3, 0, 1, 1); g.fillRect(0, 1, 5, 2); g.fillRect(0, 3, 6, 3);
-    if (f === 0) g.fillRect(6, 1, 1, 4);
-    else { g.fillRect(6, 3, 2, 1); g.fillRect(7, 2, 1, 1); }
-    g.fillStyle(0x1a1a1a, 1); g.fillRect(1, 2, 1, 1); g.fillRect(3, 2, 1, 1);
-    if (def.name === 'orange' || def.name === 'gray') { g.fillStyle(def.stripe, 1); g.fillRect(2, 3, 1, 3); g.fillRect(0, 4, 6, 1); }
-    g.generateTexture(key, 8, 7); g.destroy(); nearest(scene, key);
+    g.fillStyle(0x000000, 0.28); g.fillEllipse(6, 8.4, 10, 1.2);
+    if (f === 0) paintCatSit(g, def); else paintCatWalk(g, def, f);
+    g.generateTexture(key, 12, 9); g.destroy(); nearest(scene, key);
   }
 }
 // 16x8 cars: chassis, windows, wheels, headlights. Taxi adds checker + roof sign.
@@ -129,10 +169,10 @@ export function spawnCats(scene, count) {
   for (let i = 0; i < n; i++) {
     const ci = Math.floor(Math.random() * CAT_DEFS.length), sitting = Math.random() < 0.3;
     const x = randBetween(bounds.x0, bounds.x1), y = randBetween(bounds.y0, bounds.y1);
-    const sprite = scene.add.image(x, y, `npc-cat-${CAT_DEFS[ci].name}-0`);
+    const sprite = scene.add.image(x, y, `npc-cat-${CAT_DEFS[ci].name}-${sitting ? 0 : 1}`);
     sprite.setDepth(x + y + 20000);
     const t = pickTile(x, y, bounds, CAT_TILE);
-    cats.push({ sprite, bounds, ci, frame: 0, wag: randBetween(0, WAG_TIME), sitting, tx: t.x, ty: t.y, timer: randBetween(1, 3) });
+    cats.push({ sprite, bounds, ci, frame: sitting ? 0 : 1, wag: randBetween(0, WAG_TIME), sitting, tx: t.x, ty: t.y, timer: randBetween(1, 3) });
   }
 }
 export function spawnCars(scene, count) {
@@ -186,7 +226,11 @@ export function spawnGulls(scene, count) {
 }
 function updateCat(c, dt) {
   c.wag += dt;
-  if (c.wag >= WAG_TIME) { c.wag = 0; c.frame = 1 - c.frame; c.sprite.setTexture(`npc-cat-${CAT_DEFS[c.ci].name}-${c.frame}`); }
+  if (c.wag >= WAG_TIME) {
+    c.wag = 0;
+    c.frame = c.sitting ? 0 : (c.frame === 1 ? 2 : 1);
+    c.sprite.setTexture(`npc-cat-${CAT_DEFS[c.ci].name}-${c.frame}`);
+  }
   if (c.sitting) return;
   c.timer -= dt;
   if (c.timer <= 0) { const t = pickTile(c.sprite.x, c.sprite.y, c.bounds, CAT_TILE); c.tx = t.x; c.ty = t.y; c.timer = randBetween(1, 3); }

@@ -79,7 +79,7 @@ function parseOsmXml(xml) {
       });
     } else if (tags.highway) {
       if (/^(residential|service|footway|steps|pedestrian|path|living_street|unclassified|tertiary|secondary)$/.test(tags.highway))
-        roads.push({ id: `w${id}`, pts });
+        roads.push({ id: `w${id}`, pts, name: tags.name ?? null, kind: tags.highway });
     }
   }
   buildings.sort((a, b) => footprintArea(b.pts) - footprintArea(a.pts));

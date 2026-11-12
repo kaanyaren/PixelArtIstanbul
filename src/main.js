@@ -101,9 +101,12 @@ class MainScene extends Phaser.Scene {
       return { b, cart, bb: bboxOf(cart), i };
     });
     const roadLines = (data.roads || []).map((road) => {
-      const raw = Array.isArray(road[0]) ? road : road.pts || [];
+      const raw = Array.isArray(road) ? road : road.pts || [];
       return raw.map(toCart);
     });
+    const roadMeta = (data.roads || []).map((road) =>
+      Array.isArray(road) ? { name: null, kind: null } : { name: road.name ?? null, kind: road.kind ?? null },
+    );
 
     // Ground base #E8DCC0 with subtle block variation.
     let minX = Infinity;
@@ -210,6 +213,95 @@ class MainScene extends Phaser.Scene {
       }
     }
 
+    // Street furniture + labels (read road.name / road.kind where road is object).
+    {
+      const lampKinds = new Set(['tertiary', 'secondary', 'residential']);
+      const crossKinds = new Set(['tertiary', 'secondary', 'primary', 'residential']);
+      const labelCands = [];
+      roadLines.forEach((line, ri) => {
+        const meta = roadMeta[ri] || { name: null, kind: null };
+        if (line.length < 2) return;
+        const scr = line.map(([x, y]) => toScreen(x, y));
+        let screenLen = 0;
+        let cartLen = 0;
+        let bestLen = -1;
+        let bestA = null;
+        let bestB = null;
+        for (let i = 0; i + 1 < line.length; i++) {
+          const cl = Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]);
+          cartLen += cl;
+          const sl = Math.hypot(scr[i + 1].x - scr[i].x, scr[i + 1].y - scr[i].y);
+          screenLen += sl;
+          if (sl > bestLen) {
+            bestLen = sl;
+            bestA = scr[i];
+            bestB = scr[i + 1];
+          }
+        }
+        // Crosswalks: zebra of 5 white bars perpendicular at midpoint.
+        if (crossKinds.has(meta.kind) && cartLen > 80) {
+          const half = cartLen / 2;
+          let acc = 0;
+          let mi = 0;
+          while (mi + 1 < line.length - 1 && acc + Math.hypot(line[mi + 1][0] - line[mi][0], line[mi + 1][1] - line[mi][1]) < half) {
+            acc += Math.hypot(line[mi + 1][0] - line[mi][0], line[mi + 1][1] - line[mi][1]);
+            mi++;
+          }
+          const [ax, ay] = line[mi];
+          const [bx, by] = line[mi + 1];
+          const segLen = Math.hypot(bx - ax, by - ay) || 1;
+          const dx = (bx - ax) / segLen;
+          const dy = (by - ay) / segLen;
+          const t = (half - acc) / segLen;
+          const mx = ax + (bx - ax) * t;
+          const my = ay + (by - ay) * t;
+          const px = -dy;
+          const py = dx;
+          g.lineStyle(2, 0xffffff, 0.9);
+          for (let k = -2; k <= 2; k++) {
+            const cx = mx + dx * k * 2;
+            const cy = my + dy * k * 2;
+            const e0 = toScreen(cx + px * 3, cy + py * 3);
+            const e1 = toScreen(cx - px * 3, cy - py * 3);
+            g.lineBetween(e0.x, e0.y, e1.x, e1.y);
+          }
+        }
+        // Street lamps: every ~45m, alternating sides.
+        if (lampKinds.has(meta.kind) && cartLen > 45) {
+          const cum = [0];
+          for (let i = 0; i + 1 < line.length; i++) {
+            cum.push(cum[i] + Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]));
+          }
+          let side = 1;
+          for (let s = 22.5; s < cartLen; s += 45) {
+            let seg = 0;
+            while (seg + 1 < cum.length - 1 && cum[seg + 1] < s) seg++;
+            const sLen = cum[seg + 1] - cum[seg] || 1;
+            const t = (s - cum[seg]) / sLen;
+            const [ax, ay] = line[seg];
+            const [bx, by] = line[seg + 1];
+            const dx = (bx - ax) / sLen;
+            const dy = (by - ay) / sLen;
+            const lx = ax + (bx - ax) * t + -dy * 4 * side;
+            const ly = ay + (by - ay) * t + dx * 4 * side;
+            side = -side;
+            const p = toScreen(lx, ly);
+            g.lineStyle(3, 0x555555, 1);
+            g.lineBetween(p.x, p.y, p.x, p.y - 18);
+            g.fillStyle(0x333333, 1);
+            g.fillRect(p.x - 2, p.y - 22, 4, 4);
+            g.fillStyle(0xffe9a8, 1);
+            g.fillCircle(p.x, p.y - 18, 2);
+          }
+        }
+        // Street name label candidate: keep full screen polyline; placed near player later.
+        if (meta.name && screenLen > 120) {
+          labelCands.push({ name: meta.name, scr });
+        }
+      });
+      this._labelCands = labelCands;
+    }
+
     // Buildings far-first: sort by (minX + minY), seeded facade via look.js.
     buildings.sort((p, q) => p.bb.minX + p.bb.minY - (q.bb.minX + q.bb.minY));
     for (const { b, cart, bb } of buildings) {
@@ -289,7 +381,7 @@ class MainScene extends Phaser.Scene {
       this.cartY += 2;
     }
 
-    // Character: 10x14 texture walker (images render reliably), 3 shirt colors x 2 frames.
+    // Character: 12x18 walker textures, 3 looks x 2 frames (legs apart/together).
     const WALK = { Green: 0x4dc26b, Blue: 0x4d8ac2, Red: 0xc25d4d };
     this.walkSet = 'Green';
     for (const [name, shirt] of Object.entries(WALK)) {
@@ -297,14 +389,48 @@ class MainScene extends Phaser.Scene {
         const key = `walk-${name}-${f}`;
         if (this.textures.exists(key)) continue;
         const wg = this.make.graphics({ x: 0, y: 0, add: false });
-        wg.fillStyle(0x5a3a22, 1).fillRect(2, 0, 6, 2);
-        wg.fillStyle(0xf2c89b, 1).fillRect(2, 2, 6, 3);
-        wg.fillStyle(0x222222, 1).fillRect(3, 3, 1, 1).fillRect(6, 3, 1, 1);
-        wg.fillStyle(shirt, 1).fillRect(1, 5, 8, 5);
-        wg.fillStyle(0x2e3440, 1);
-        if (f === 0) wg.fillRect(2, 10, 2, 4).fillRect(6, 10, 2, 3);
-        else wg.fillRect(2, 10, 2, 3).fillRect(6, 10, 2, 4);
-        wg.generateTexture(key, 10, 14);
+        if (name === 'Green') {
+          // Woman: long dark hair sides, green dress.
+          wg.fillStyle(0x3a2a1a, 1).fillRect(2, 0, 8, 2);
+          wg.fillStyle(0x3a2a1a, 1).fillRect(1, 0, 2, 10).fillRect(9, 0, 2, 10);
+          wg.fillStyle(0xf2c89b, 1).fillRect(3, 2, 6, 4);
+          wg.fillStyle(0x222222, 1).fillRect(4, 4, 1, 1).fillRect(7, 4, 1, 1);
+          wg.fillStyle(shirt, 1).fillRect(2, 6, 8, 7);
+          wg.fillStyle(0xf2c89b, 1);
+          if (f === 0) wg.fillRect(3, 13, 2, 3).fillRect(7, 13, 2, 3);
+          else wg.fillRect(5, 13, 2, 3);
+          wg.fillStyle(0x2e3440, 1);
+          if (f === 0) wg.fillRect(3, 16, 2, 2).fillRect(7, 16, 2, 2);
+          else wg.fillRect(5, 16, 2, 2);
+        } else if (name === 'Blue') {
+          // Man: short hair + cap, blue jacket, jeans.
+          wg.fillStyle(0x5a3a22, 1).fillRect(2, 2, 1, 2).fillRect(9, 2, 1, 2);
+          wg.fillStyle(0xf2c89b, 1).fillRect(3, 2, 6, 4);
+          wg.fillStyle(0x222222, 1).fillRect(4, 4, 1, 1).fillRect(7, 4, 1, 1);
+          wg.fillStyle(0x2a4a6b, 1).fillRect(2, 0, 8, 2).fillRect(1, 1, 10, 1);
+          wg.fillStyle(shirt, 1).fillRect(2, 6, 8, 6);
+          wg.fillStyle(0x3a4a5a, 1);
+          if (f === 0) wg.fillRect(3, 12, 2, 4).fillRect(7, 12, 2, 4);
+          else wg.fillRect(5, 12, 2, 4);
+          wg.fillStyle(0x222222, 1);
+          if (f === 0) wg.fillRect(3, 16, 2, 2).fillRect(7, 16, 2, 2);
+          else wg.fillRect(5, 16, 2, 2);
+        } else {
+          // Kid: red hoodie with hood, shorts.
+          wg.fillStyle(shirt, 1).fillRect(2, 0, 8, 6);
+          wg.fillStyle(0xf2c89b, 1).fillRect(4, 2, 4, 4);
+          wg.fillStyle(0x222222, 1).fillRect(5, 4, 1, 1).fillRect(7, 4, 1, 1);
+          wg.fillStyle(shirt, 1).fillRect(2, 6, 8, 6);
+          wg.fillStyle(0xd8ccb4, 1).fillRect(5, 8, 2, 2);
+          wg.fillStyle(0x3a4a5a, 1).fillRect(3, 12, 6, 2);
+          wg.fillStyle(0xf2c89b, 1);
+          if (f === 0) wg.fillRect(3, 14, 2, 2).fillRect(7, 14, 2, 2);
+          else wg.fillRect(5, 14, 2, 2);
+          wg.fillStyle(0x222222, 1);
+          if (f === 0) wg.fillRect(3, 16, 2, 2).fillRect(7, 16, 2, 2);
+          else wg.fillRect(5, 16, 2, 2);
+        }
+        wg.generateTexture(key, 12, 18);
         wg.destroy();
       }
     }
@@ -324,6 +450,58 @@ class MainScene extends Phaser.Scene {
     this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
     this.cameras.main.setZoom(1.2);
     this.npcCenter = { x: this.player.x, y: this.player.y };
+    // Street name labels at road points nearest the player (max 12, within 700px).
+    {
+      const px = this.player.x;
+      const py = this.player.y;
+      const placed = [];
+      for (const c of this._labelCands || []) {
+        let bd = Infinity;
+        let bx = 0;
+        let by = 0;
+        let ba = 0;
+        for (let i = 0; i + 1 < c.scr.length; i++) {
+          const A = c.scr[i];
+          const B = c.scr[i + 1];
+          const vx = B.x - A.x;
+          const vy = B.y - A.y;
+          const L2 = vx * vx + vy * vy || 1;
+          let t = ((px - A.x) * vx + (py - A.y) * vy) / L2;
+          t = Math.max(0, Math.min(1, t));
+          const qx = A.x + vx * t;
+          const qy = A.y + vy * t;
+          const d = Math.hypot(px - qx, py - qy);
+          if (d < bd) {
+            bd = d;
+            bx = qx;
+            by = qy;
+            ba = Math.atan2(vy, vx);
+          }
+        }
+        if (bd < 700) placed.push({ name: c.name, d: bd, x: bx, y: by, ang: ba });
+      }
+      placed.sort((a, b) => a.d - b.d);
+      const shown = [];
+      for (const c of placed) {
+        if (shown.length >= 12) break;
+        if (shown.some((s) => Math.hypot(s.x - c.x, s.y - c.y) < 70)) continue;
+        shown.push(c);
+        let ang = c.ang;
+        if (ang > Math.PI / 2) ang -= Math.PI;
+        if (ang < -Math.PI / 2) ang += Math.PI;
+        this.add
+          .text(c.x, c.y - 10, c.name, {
+            fontFamily: 'monospace',
+            fontSize: '11px',
+            color: '#4a3f30',
+            backgroundColor: '#f5ead0',
+            padding: { x: 4, y: 2 },
+          })
+          .setOrigin(0.5)
+          .setRotation(ang)
+          .setDepth(c.x + c.y + 20000);
+      }
+    }
     spawnCats(this, 8);
     spawnCars(this, 5);
     spawnPeople(this, 6);
