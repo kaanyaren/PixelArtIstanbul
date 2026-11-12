@@ -8,7 +8,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CENTER = { lat: 41.0615, lon: 29.0125 };
-const BBOX = { south: 41.05835, west: 29.0085, north: 41.06465, east: 29.0165 };
+const BBOX = { south: 41.057009, west: 29.006548, north: 41.065991, east: 29.018452 };
+const MINT = { lat: 41.0578261, lon: 29.0082127 }; // Darphane ve Damga Matbaası (Nominatim)
+const MS_URL =
+  "https://bfppub.z5.web.core.windows.net/2026-08-13/global-buildings.geojsonl/RegionName=Turkey/quadkey=120323223/part-00092-110f5303-ff85-4c71-a2bf-c6070024fec8.c000.csv.gz";
+const MS_CACHE = resolve(dirname(fileURLToPath(import.meta.url)), ".cache/ms-120323223.csv.gz");
 const OSM_API = "https://api.openstreetmap.org/api/0.6/map";
 const DEFAULT_OUT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -23,15 +27,16 @@ Usage:
 
 Defaults:
   --out  ${DEFAULT_OUT}
-  bbox    ${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east} (center ${CENTER.lat},${CENTER.lon}, r 350m)
+  bbox    ${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east} (center ${CENTER.lat},${CENTER.lon}, r 500m)
 
 Source: OpenStreetMap main API (${OSM_API}?bbox=${BBOX.west},${BBOX.south},${BBOX.east},${BBOX.north}), license ODbL.
+Plus Microsoft Global ML footprints tile (CDLA-2.0) cached to scripts/.cache, merged for OSM gaps.
 On network failure: keeps existing JSON, warns, exits 0.`);
 }
 
 function parseNum(v) {
   if (v == null) return null;
-  const n = parseFloat(String(v).replace(/[^0-9.]/g, ""));
+  const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
@@ -82,8 +87,27 @@ function parseOsmXml(xml) {
         roads.push({ id: `w${id}`, pts, name: tags.name ?? null, kind: tags.highway, refs });
     }
   }
-  // Name propagation: split OSM ways share nodes; unnamed vehicular segments
-  // inherit the name when shared-node votes clearly agree (best >= 2, 2x runner-up).
+  // associatedStreet relations: street name lives on the relation, not the ways.
+  const relNames = new Map(); // wayId -> name
+  for (const m of xml.matchAll(/<relation\b[^>]*>([\s\S]*?)<\/relation>/g)) {
+    const body = m[1];
+    const tags = {};
+    for (const t of body.matchAll(/<tag\b[^>]*k="([^"]+)"[^>]*v="([^"]*)"/g)) tags[t[1]] = t[2];
+    if (tags.type === 'associatedStreet' && tags.name) {
+      for (const w of body.matchAll(/<member\b[^>]*type="way"[^>]*ref="(-?\d+)"/g)) {
+        if (!relNames.has(w[1])) relNames.set(w[1], tags.name);
+      }
+    }
+  }
+  for (const r of roads) {
+    if (!r.name) {
+      const wid = r.id.slice(1);
+      if (relNames.has(wid)) {
+        r.name = relNames.get(wid);
+        r.fromRelation = true;
+      }
+    }
+  }
   const nodeNames = new Map();
   for (const r of roads) {
     if (!r.name) continue;
@@ -109,11 +133,134 @@ function parseOsmXml(xml) {
   }
   for (const r of roads) delete r.refs;
   buildings.sort((a, b) => footprintArea(b.pts) - footprintArea(a.pts));
+  // Darphane landmark: biggest footprint within 100m of the Mint.
+  {
+    const kx = 111320 * Math.cos((CENTER.lat * Math.PI) / 180);
+    const dx = (lon) => (lon - MINT.lon) * kx;
+    const dy = (lat) => (MINT.lat - lat) * 111320;
+    let bestB = null;
+    let bestA = -1;
+    for (const b of buildings) {
+      let sx = 0;
+      let sy = 0;
+      for (const [lo, la] of b.pts) {
+        sx += dx(lo);
+        sy += dy(la);
+      }
+      const cx = sx / b.pts.length;
+      const cy = sy / b.pts.length;
+      if (Math.hypot(cx, cy) < 100) {
+        const a = footprintArea(b.pts);
+        if (a > bestA) {
+          bestA = a;
+          bestB = b;
+        }
+      }
+    }
+    if (bestB) bestB.landmark = 'DARPHANE';
+  }
   return {
-    meta: { center: CENTER, bbox: BBOX, source: "OpenStreetMap ODbL" },
+    meta: { center: CENTER, bbox: BBOX, source: "OpenStreetMap ODbL", sources: ["OpenStreetMap ODbL"] },
     buildings: buildings.slice(0, 500),
     roads,
   };
+}
+
+// Microsoft Global ML footprints (CDLA-2.0): extra source for OSM gaps.
+// Cached tile download; stream-filtered to bbox; deduped vs OSM by centroid.
+async function fetchMsSupplement(osmBuildings) {
+  const { createGunzip } = await import('node:zlib');
+  const { pipeline } = await import('node:stream/promises');
+  const { createWriteStream, createReadStream, existsSync, statSync } = await import('node:fs');
+  mkdirSync(dirname(MS_CACHE), { recursive: true });
+  if (!existsSync(MS_CACHE)) {
+    console.log('ms: downloading tile (40MB, once)...');
+    const res = await fetch(MS_URL, { headers: { 'User-Agent': 'PixelArtIstanbul/0.1' } });
+    if (!res.ok) throw new Error(`MS HTTP ${res.status}`);
+    await pipeline(res.body, createWriteStream(MS_CACHE));
+    console.log(`ms: cached ${Math.round(statSync(MS_CACHE).size / 1e6)}MB`);
+  }
+  // OSM centroid grid for overlap skip.
+  const grid = new Map();
+  const gk = (x, y) => `${Math.round(x * 500)},${Math.round(y * 500)}`;
+  for (const b of osmBuildings) {
+    let sx = 0;
+    let sy = 0;
+    for (const [lo, la] of b.pts) {
+      sx += lo;
+      sy += la;
+    }
+    const cx = sx / b.pts.length;
+    const cy = sy / b.pts.length;
+    const k = gk(cx, cy);
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(b);
+  }
+  const inOsm = (cx, cy) => {
+    const gx = Math.round(cx * 500);
+    const gy = Math.round(cy * 500);
+    for (let ix = -1; ix <= 1; ix++)
+      for (let iy = -1; iy <= 1; iy++) {
+        const cell = grid.get(`${gx + ix},${gy + iy}`);
+        if (!cell) continue;
+        for (const b of cell) {
+          let inside = false;
+          const p = b.pts;
+          for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+            const [xi, yi] = p[i];
+            const [xj, yj] = p[j];
+            if (yi > cy !== yj > cy && cx < ((xj - xi) * (cy - yi)) / (yj - yi) + xi) inside = !inside;
+          }
+          if (inside) return true;
+        }
+      }
+    return false;
+  };
+  const out = [];
+  let seen = 0;
+  const rl = (await import('node:readline')).createInterface({
+    input: createReadStream(MS_CACHE).pipe(createGunzip()),
+    crlfDelay: Infinity,
+  });
+  for await (const line of rl) {
+    if (!line || line[0] !== '{') continue;
+    let f;
+    try {
+      f = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const geom = f.geometry;
+    if (!geom || geom.type !== 'Polygon' || !geom.coordinates?.[0]?.length) continue;
+    const ring = geom.coordinates[0];
+    let mnx = 1e9;
+    let mxx = -1e9;
+    let mny = 1e9;
+    let mxy = -1e9;
+    for (const [lo, la] of ring) {
+      if (lo < mnx) mnx = lo;
+      if (lo > mxx) mxx = lo;
+      if (la < mny) mny = la;
+      if (la > mxy) mxy = la;
+    }
+    if (mxx < BBOX.west || mnx > BBOX.east || mxy < BBOX.south || mny > BBOX.north) continue;
+    seen++;
+    const cx = (mnx + mxx) / 2;
+    const cy = (mny + mxy) / 2;
+    if (inOsm(cx, cy)) continue;
+    const pr = f.properties ?? {};
+    const h = parseNum(pr.height ?? pr.HEIGHT ?? pr.min_height);
+    out.push({
+      id: `ms${seen}`,
+      pts: ring.map(([lo, la]) => [lo, la]),
+      levels: 3,
+      height: h != null && h > 0 ? Math.round(h) : 9,
+      color: null,
+      source: 'ms',
+    });
+    if (out.length >= 2000) break;
+  }
+  return out;
 }
 
 async function main() {
@@ -134,6 +281,14 @@ async function main() {
     if (!res.ok) throw new Error(`OSM HTTP ${res.status}`);
     const xml = await res.text();
     json = parseOsmXml(xml);
+    try {
+      const ms = await fetchMsSupplement(json.buildings);
+      console.log(`ms: +${ms.length} supplemental buildings`);
+      json.buildings = [...json.buildings, ...ms];
+      json.meta.sources.push("Microsoft GlobalMLBuildingFootprints CDLA-2.0");
+    } catch (e) {
+      console.warn(`warn: MS supplement skipped (${e.message})`);
+    }
   } catch (err) {
     console.warn(`warn: OSM fetch failed (${err.message}); keeping starter JSON.`);
     return; // exit 0

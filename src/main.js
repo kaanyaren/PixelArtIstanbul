@@ -387,6 +387,21 @@ class MainScene extends Phaser.Scene {
       const floors = Math.max(1, Math.round(b.height / 3));
       drawBuilding(g, base, { heightPx: b.height * PX_M, seed, floors, facade });
       this.bboxes.push(bb);
+      if (b.landmark) {
+        const lcx = base.reduce((s, p) => s + p.x, 0) / base.length;
+        const topY = Math.min(...base.map((p) => p.y)) - b.height * PX_M - 30;
+        this.add
+          .text(lcx, topY, b.landmark, {
+            fontFamily: 'monospace',
+            fontSize: '24px',
+            fontStyle: 'bold',
+            color: '#8A1F1F',
+            backgroundColor: '#F7ECC8',
+            padding: { x: 8, y: 4 },
+          })
+          .setOrigin(0.5)
+          .setDepth(lcx + topY + 20001);
+      }
     }
 
     // Trees: seeded along each road every ~14m, alternating sides.
@@ -431,27 +446,22 @@ class MainScene extends Phaser.Scene {
     // Screen-space road loops for cars (NPC module reads scene.roads).
     this.roads = roadLines.map((line) => line.map(([x, y]) => toScreen(x, y)));
 
-    // Player start: center of all mapped geometry (dense area), nudged off walls.
-    // Player start: densest building cluster (most neighbors within 60m).
-    let bestC = null;
-    let bestN = -1;
-    const centers = buildings.map(({ bb }) => [(bb.minX + bb.maxX) / 2, (bb.minY + bb.maxY) / 2]);
-    for (const [cx0, cy0] of centers) {
-      let n = 0;
-      for (const [ox, oy] of centers) {
-        if (Math.hypot(ox - cx0, oy - cy0) < 60) n++;
+    // Player start: exactly the dropped pin (area center = 0,0), spiralled out of walls.
+    this.cartX = 0;
+    this.cartY = 3;
+    if (this.blocked(this.cartX, this.cartY)) {
+      let found = false;
+      for (let r = 2; r <= 40 && !found; r += 2) {
+        for (let a = 0; a < 8 && !found; a++) {
+          const nx = r * Math.cos((a * Math.PI) / 4);
+          const ny = r * Math.sin((a * Math.PI) / 4) + 3;
+          if (!this.blocked(nx, ny)) {
+            this.cartX = nx;
+            this.cartY = ny;
+            found = true;
+          }
+        }
       }
-      if (n > bestN) {
-        bestN = n;
-        bestC = [cx0, cy0];
-      }
-    }
-    this.cartX = bestC ? bestC[0] : 0;
-    this.cartY = bestC ? bestC[1] + 3 : 3;
-    // Nudge out of any building bbox.
-    for (let tries = 0; tries < 40 && this.blocked(this.cartX, this.cartY); tries++) {
-      this.cartX += 2;
-      this.cartY += 2;
     }
 
     // Character: 12x18 walker textures, 3 looks x 2 frames (legs apart/together).
@@ -582,13 +592,13 @@ class MainScene extends Phaser.Scene {
             ba = Math.atan2(vy, vx);
           }
         }
-        if (bd < 1000) placed.push({ name: c.name, d: bd, x: bx, y: by, ang: ba });
+        if (bd < 1400) placed.push({ name: c.name, d: bd, x: bx, y: by, ang: ba });
       }
       placed.sort((a, b) => a.d - b.d);
       const shown = [];
       for (const c of placed) {
-        if (shown.length >= 18) break;
-        if (shown.some((s) => Math.hypot(s.x - c.x, s.y - c.y) < 70)) continue;
+        if (shown.length >= 30) break;
+        if (shown.some((s) => Math.hypot(s.x - c.x, s.y - c.y) < 60)) continue;
         shown.push(c);
         let ang = c.ang;
         if (ang > Math.PI / 2) ang -= Math.PI;

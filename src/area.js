@@ -87,8 +87,35 @@ function parseOsmXml(text) {
     if (tags.building != null) {
       if (pts.length >= 3) bRaw.push({ id: "w" + id, pts, tags, area: footprintAreaM2(pts) });
     } else if (tags.highway != null) {
-      roads.push({ id: "w" + id, pts, name: tags.name ?? null, kind: tags.highway });
+      if (/^(residential|service|footway|steps|pedestrian|path|living_street|unclassified|tertiary|secondary)$/.test(tags.highway))
+        roads.push({ id: "w" + id, pts, name: tags.name ?? null, kind: tags.highway });
     }
+  }
+  // associatedStreet relations carry the name for split member ways.
+  const relEls = doc.getElementsByTagName("relation");
+  const relNames = new Map();
+  for (let i = 0; i < relEls.length; i++) {
+    const rel = relEls[i];
+    let type = null;
+    let name = null;
+    const tagEls = rel.getElementsByTagName("tag");
+    for (let j = 0; j < tagEls.length; j++) {
+      const k = tagEls[j].getAttribute("k");
+      if (k === "type") type = tagEls[j].getAttribute("v");
+      if (k === "name") name = tagEls[j].getAttribute("v");
+    }
+    if (type === "associatedStreet" && name) {
+      const memEls = rel.getElementsByTagName("member");
+      for (let j = 0; j < memEls.length; j++) {
+        if (memEls[j].getAttribute("type") === "way") {
+          const ref = memEls[j].getAttribute("ref");
+          if (ref != null && !relNames.has(String(ref))) relNames.set(String(ref), name);
+        }
+      }
+    }
+  }
+  for (const r of roads) {
+    if (!r.name && relNames.has(r.id.slice(1))) r.name = relNames.get(r.id.slice(1));
   }
   bRaw.sort((a, b) => b.area - a.area);
   const buildings = bRaw.slice(0, 500).map((b) => {
@@ -101,47 +128,50 @@ function parseOsmXml(text) {
   return { buildings, roads };
 }
 
-export async function fetchArea(lat, lon, r = 350) {
+export async function fetchArea(lat, lon, r = 500) {
   const la = Number(lat);
   const lo = Number(lon);
-  const rad = Number(r) || 350;
-  const dLat = rad / 111320;
-  const dLon = rad / (111320 * Math.cos((la * Math.PI) / 180));
-  const w = lo - dLon;
-  const s = la - dLat;
-  const e = lo + dLon;
-  const n = la + dLat;
+  const radii = [Number(r) || 500, Math.max(250, (Number(r) || 500) * 0.6)];
 
   if (typeof fetch === "undefined") throw new Error("Could not load map data (network busy). Try again.");
 
-  const attempts = [
-    async () => {
-      const url = `https://api.openstreetmap.org/api/0.6/map?bbox=${w},${s},${e},${n}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("osm api failed: " + res.status);
-      return parseOsmXml(await res.text());
-    },
-    async () => {
-      const ql = `[out:xml][timeout:30];(way["building"](${s},${w},${n},${e});way["highway"~"^(residential|service|footway|steps|pedestrian|path|living_street|unclassified|tertiary|secondary)$"](${s},${w},${n},${e}););out geom;`;
-      const res = await fetch("https://overpass-api.de/api/interpreter", {
-        method: "POST",
-        body: ql,
-      });
-      if (!res.ok) throw new Error("overpass failed: " + res.status);
-      return parseOsmXml(await res.text());
-    },
-  ];
+  for (const rad of radii) {
+    const dLat = rad / 111320;
+    const dLon = rad / (111320 * Math.cos((la * Math.PI) / 180));
+    const w = lo - dLon;
+    const s = la - dLat;
+    const e = lo + dLon;
+    const n = la + dLat;
 
-  for (const attempt of attempts) {
-    try {
-      const { buildings, roads } = await attempt();
-      return {
-        meta: { center: { lat: la, lon: lo }, source: "OpenStreetMap ODbL" },
-        buildings,
-        roads,
-      };
-    } catch {
-      // try next source
+    const attempts = [
+      async () => {
+        const url = `https://api.openstreetmap.org/api/0.6/map?bbox=${w},${s},${e},${n}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("osm api failed: " + res.status);
+        return parseOsmXml(await res.text());
+      },
+      async () => {
+        const ql = `[out:xml][timeout:30];(way["building"](${s},${w},${n},${e});way["highway"~"^(residential|service|footway|steps|pedestrian|path|living_street|unclassified|tertiary|secondary)$"](${s},${w},${n},${e}););out geom;`;
+        const res = await fetch("https://overpass-api.de/api/interpreter", {
+          method: "POST",
+          body: ql,
+        });
+        if (!res.ok) throw new Error("overpass failed: " + res.status);
+        return parseOsmXml(await res.text());
+      },
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        const { buildings, roads } = await attempt();
+        return {
+          meta: { center: { lat: la, lon: lo }, source: "OpenStreetMap ODbL" },
+          buildings,
+          roads,
+        };
+      } catch {
+        // try next source, then smaller radius
+      }
     }
   }
   throw new Error("Could not load map data (network busy). Try again.");

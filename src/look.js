@@ -82,6 +82,8 @@ function windowsOnWall(g, A, B, At, Bt, rng, floors) {
       g.fillRect(p.x - 5, p.y - 6, 10, 12);
       g.fillStyle(PAL.glass, 1);
       g.fillRect(p.x - 3.5, p.y - 4.5, 7, 9);
+      g.fillStyle(PAL.trim, 1);
+      g.fillRect(p.x - 6, p.y + 6, 12, 2);
       if (rng() < 0.5) {
         g.fillStyle(0xF5EDD6, 1);
         g.fillRect(p.x - 3.5, p.y - 4.5, 2, 9);
@@ -119,6 +121,13 @@ export function drawBuilding(g, base, opts = {}) {
   g.fillPoints([pF, pA, tA, tF], true);
   g.fillStyle(shade(fc, 0.95), 1);
   g.fillPoints([pF, tF, tB, pB], true);
+  // Sunlit top edge + soft AO base on both faces.
+  g.lineStyle(2, 0xfff3d0, 0.75);
+  g.lineBetween(tF.x, tF.y, tA.x, tA.y);
+  g.lineBetween(tF.x, tF.y, tB.x, tB.y);
+  g.lineStyle(3, shade(fc, 0.55), 0.5);
+  g.lineBetween(pF.x, pF.y - 1, pA.x, pA.y - 1);
+  g.lineBetween(pF.x, pF.y - 1, pB.x, pB.y - 1);
 
   g.lineStyle(1, PAL.trim, 0.7);
   for (let i = 1; i <= floors; i++) {
@@ -170,6 +179,15 @@ export function drawBuilding(g, base, opts = {}) {
       const j = (i + 1) % tAll.length;
       g.fillStyle(shade(face, i % 2 ? 1.06 : 0.98), 1);
       g.fillPoints([tAll[i], tAll[j], ridge[j], ridge[i]], true);
+      // Tile courses parallel to the eave.
+      g.lineStyle(1, shade(face, 0.7), 0.5);
+      for (let k = 1; k <= 2; k++) {
+        const t = k / 3;
+        g.lineBetween(
+          lerp(tAll[i].x, ridge[i].x, t), lerp(tAll[i].y, ridge[i].y, t),
+          lerp(tAll[j].x, ridge[j].x, t), lerp(tAll[j].y, ridge[j].y, t),
+        );
+      }
     }
     g.fillStyle(isZinc ? shade(zinc, 1.15) : PAL.roofTop, 1);
     g.fillPoints(ridge, true);
@@ -292,6 +310,18 @@ export function drawBuilding(g, base, opts = {}) {
 export function drawTree(g, x, y, seed, s = 1) {
   const rng = mulberry32(typeof seed === "number" ? seed : hashStr(String(seed)));
   ell(g, x, y + 2 * s, 10 * s, 3.5 * s, 0x3A2A20, 0.15);
+  if (rng() < 0.2) {
+    // Cypress: thin dark column, very Istanbul.
+    g.fillStyle(0x2E4A2E, 1);
+    g.fillRect(x - 3 * s, y - 34 * s, 6 * s, 34 * s);
+    g.fillStyle(0x3E5E3A, 1);
+    g.fillRect(x - 2 * s, y - 34 * s, 2 * s, 34 * s);
+    g.fillPoints(
+      [{ x: x - 3 * s, y: y - 34 * s }, { x: x + 3 * s, y: y - 34 * s }, { x, y: y - 39 * s }],
+      true,
+    );
+    return;
+  }
   g.fillStyle(0x7A5230, 1);
   g.fillRect(x - 2 * s, y - 15 * s, 4 * s, 15 * s);
   blob(g, x - 7 * s, y - 16 * s, 7 * s, 0x4E7A52, rng);
