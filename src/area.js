@@ -128,6 +128,78 @@ function parseOsmXml(text) {
   return { buildings, roads };
 }
 
+function centroid(pts) {
+  let sx = 0;
+  let sy = 0;
+  for (const p of pts) {
+    sx += p[0];
+    sy += p[1];
+  }
+  return [sx / pts.length, sy / pts.length];
+}
+
+function inPoly(cx, cy, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    if (yi > cy !== yj > cy && cx < ((xj - xi) * (cy - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// Microsoft supplemental cells (pre-baked static files, 404-tolerant).
+async function fetchMsCells(w, s, e, n, existing) {
+  const ix0 = Math.floor(w * 100);
+  const ix1 = Math.floor(e * 100);
+  const iy0 = Math.floor(s * 100);
+  const iy1 = Math.floor(n * 100);
+  const grid = new Map();
+  const gk = (x, y) => `${Math.round(x * 500)},${Math.round(y * 500)}`;
+  for (const b of existing) {
+    const [cx, cy] = centroid(b.pts);
+    const k = gk(cx, cy);
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(b);
+  }
+  const covered = (cx, cy) => {
+    const gx = Math.round(cx * 500);
+    const gy = Math.round(cy * 500);
+    for (let ax = -1; ax <= 1; ax++)
+      for (let ay = -1; ay <= 1; ay++) {
+        const cell = grid.get(`${gx + ax},${gy + ay}`);
+        if (!cell) continue;
+        for (const b of cell) if (inPoly(cx, cy, b.pts)) return true;
+      }
+    return false;
+  };
+  const out = [];
+  for (let ix = ix0; ix <= ix1; ix++)
+    for (let iy = iy0; iy <= iy1; iy++) {
+      let data;
+      try {
+        const res = await fetch(`data/ms/ms-${ix}_${iy}.json`, { cache: "no-store" });
+        if (!res.ok) continue;
+        data = await res.json();
+      } catch {
+        continue;
+      }
+      for (const b of data.buildings ?? []) {
+        if (!b.pts || b.pts.length < 3) continue;
+        const [cx, cy] = centroid(b.pts);
+        if (cx < w || cx > e || cy < s || cy > n) continue;
+        if (covered(cx, cy)) continue;
+        const nb = { id: `ms-${ix}-${iy}-${out.length}`, pts: b.pts, levels: 3, height: 9, color: null, source: "ms" };
+        out.push(nb);
+        const k = gk(cx, cy);
+        if (!grid.has(k)) grid.set(k, []);
+        grid.get(k).push(nb);
+        if (out.length >= 2000) return out;
+      }
+    }
+  return out;
+}
+
 export async function fetchArea(lat, lon, r = 500) {
   const la = Number(lat);
   const lo = Number(lon);
@@ -148,7 +220,7 @@ export async function fetchArea(lat, lon, r = 500) {
     const attempts = [
       async () => {
         const url = `https://api.openstreetmap.org/api/0.6/map?bbox=${w},${s},${e},${n}`;
-        const res = await fetch(url);
+        const res = await fetch(url, { cache: "no-store" });
         if (!res.ok) throw new Error("osm api failed: " + res.status);
         return parseOsmXml(await res.text());
       },
@@ -178,9 +250,15 @@ export async function fetchArea(lat, lon, r = 500) {
           return inR(sx / b.pts.length, sy / b.pts.length);
         });
         const keptR = roads.filter((r) => r.pts.some(([x, y]) => inR(x, y)));
+        let ms = [];
+        try {
+          ms = await fetchMsCells(w, s, e, n, keptB);
+        } catch {
+          ms = [];
+        }
         return {
           meta: { center: { lat: la, lon: lo }, source: "OpenStreetMap ODbL" },
-          buildings: keptB,
+          buildings: [...keptB, ...ms],
           roads: keptR,
         };
       } catch {

@@ -127,13 +127,13 @@ class MainScene extends Phaser.Scene {
             toast.style.display = 'block';
             setTimeout(() => { toast.style.display = 'none'; }, 4000);
           }
-          fetch('data/darphane.json')
+          fetch('data/darphane.json', { cache: 'no-store' })
             .then((r) => (r.ok ? r.json() : FALLBACK))
             .catch(() => FALLBACK)
             .then((data) => this.buildWorld(data));
         });
     } else {
-      fetch('data/darphane.json')
+      fetch('data/darphane.json', { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : FALLBACK))
         .catch(() => FALLBACK)
         .then((data) => this.buildWorld(data));
@@ -613,7 +613,7 @@ class MainScene extends Phaser.Scene {
           })
           .setOrigin(0.5)
           .setRotation(ang)
-          .setDepth(c.x + c.y + 20000);
+          .setDepth(c.x + c.y + 15000);
       }
     }
     spawnCats(this, 8);

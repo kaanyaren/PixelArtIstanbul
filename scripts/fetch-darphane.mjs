@@ -44,11 +44,19 @@ function parseNum(v) {
 }
 
 function footprintArea(pts) {
+  let mx = 0;
+  let my = 0;
+  for (const [x, y] of pts) {
+    mx += x;
+    my += y;
+  }
+  mx /= pts.length;
+  my /= pts.length;
   let a = 0;
   for (let i = 0; i < pts.length; i++) {
     const [x1, y1] = pts[i];
     const [x2, y2] = pts[(i + 1) % pts.length];
-    a += x1 * y2 - x2 * y1;
+    a += (x1 - mx) * (y2 - my) - (x2 - mx) * (y1 - my);
   }
   return Math.abs(a / 2);
 }
