@@ -136,8 +136,10 @@ export async function fetchArea(lat, lon, r = 500) {
   if (typeof fetch === "undefined") throw new Error("Could not load map data (network busy). Try again.");
 
   for (const rad of radii) {
-    const dLat = rad / 111320;
-    const dLon = rad / (111320 * Math.cos((la * Math.PI) / 180));
+    // Fetch with 150m margin so edge buildings keep full geometry; clip to rad after.
+    const frad = rad + 150;
+    const dLat = frad / 111320;
+    const dLon = frad / (111320 * Math.cos((la * Math.PI) / 180));
     const w = lo - dLon;
     const s = la - dLat;
     const e = lo + dLon;
@@ -164,10 +166,22 @@ export async function fetchArea(lat, lon, r = 500) {
     for (const attempt of attempts) {
       try {
         const { buildings, roads } = await attempt();
+        const kx = 111320 * Math.cos((la * Math.PI) / 180);
+        const inR = (lon, lat) => Math.abs((lon - lo) * kx) <= rad && Math.abs((lat - la) * 111320) <= rad;
+        const keptB = buildings.filter((b) => {
+          let sx = 0;
+          let sy = 0;
+          for (const [x, y] of b.pts) {
+            sx += x;
+            sy += y;
+          }
+          return inR(sx / b.pts.length, sy / b.pts.length);
+        });
+        const keptR = roads.filter((r) => r.pts.some(([x, y]) => inR(x, y)));
         return {
           meta: { center: { lat: la, lon: lo }, source: "OpenStreetMap ODbL" },
-          buildings,
-          roads,
+          buildings: keptB,
+          roads: keptR,
         };
       } catch {
         // try next source, then smaller radius

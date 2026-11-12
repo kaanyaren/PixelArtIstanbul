@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 
 const CENTER = { lat: 41.0615, lon: 29.0125 };
 const BBOX = { south: 41.057009, west: 29.006548, north: 41.065991, east: 29.018452 };
+// Fetch with margin so edge-straddling buildings keep full geometry; clipped to BBOX after.
+const PAD = 0.0018;
+const FBBOX = { south: BBOX.south - PAD, west: BBOX.west - PAD, north: BBOX.north + PAD, east: BBOX.east + PAD };
 const MINT = { lat: 41.0578261, lon: 29.0082127 }; // Darphane ve Damga Matbaası (Nominatim)
 const MS_URL =
   "https://bfppub.z5.web.core.windows.net/2026-08-13/global-buildings.geojsonl/RegionName=Turkey/quadkey=120323223/part-00092-110f5303-ff85-4c71-a2bf-c6070024fec8.c000.csv.gz";
@@ -62,7 +65,7 @@ function parseOsmXml(xml) {
   }
   const buildings = [];
   const roads = [];
-  for (const m of xml.matchAll(/<way\b[^>]*id="(-?\d+)"[^>]*>([\s\S]*?)<\/way>/g)) {
+  for (const m of xml.matchAll(/<way\b[^>]*?\bid="(-?\d+)"[^>]*>([\s\S]*?)<\/way>/g)) {
     const id = m[1];
     const body = m[2];
     const refs = [...body.matchAll(/<nd\b[^>]*ref="(-?\d+)"/g)].map((r) => r[1]);
@@ -133,6 +136,26 @@ function parseOsmXml(xml) {
   }
   for (const r of roads) delete r.refs;
   buildings.sort((a, b) => footprintArea(b.pts) - footprintArea(a.pts));
+  // Clip to gameplay bbox by centroid (padded fetch keeps edge geometry whole).
+  const inBox = (b) => {
+    let mnx = 1e9;
+    let mxx = -1e9;
+    let mny = 1e9;
+    let mxy = -1e9;
+    for (const [lo, la] of b.pts) {
+      if (lo < mnx) mnx = lo;
+      if (lo > mxx) mxx = lo;
+      if (la < mny) mny = la;
+      if (la > mxy) mxy = la;
+    }
+    return mxx >= BBOX.west && mnx <= BBOX.east && mxy >= BBOX.south && mny <= BBOX.north;
+  };
+  const keptB = buildings.filter(inBox);
+  const keptR = roads.filter((r) => r.pts.some(([lo, la]) => lo >= BBOX.west && lo <= BBOX.east && la >= BBOX.south && la <= BBOX.north));
+  buildings.length = 0;
+  buildings.push(...keptB);
+  roads.length = 0;
+  roads.push(...keptR);
   // Darphane landmark: biggest footprint within 100m of the Mint.
   {
     const kx = 111320 * Math.cos((CENTER.lat * Math.PI) / 180);
@@ -276,7 +299,7 @@ async function main() {
 
   let json;
   try {
-    const url = `${OSM_API}?bbox=${BBOX.west},${BBOX.south},${BBOX.east},${BBOX.north}`;
+    const url = `${OSM_API}?bbox=${FBBOX.west},${FBBOX.south},${FBBOX.east},${FBBOX.north}`;
     const res = await fetch(url, { headers: { "User-Agent": "PixelArtIstanbul/0.1" } });
     if (!res.ok) throw new Error(`OSM HTTP ${res.status}`);
     const xml = await res.text();
