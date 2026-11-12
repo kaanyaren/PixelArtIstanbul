@@ -2,6 +2,7 @@ import * as Phaser from 'phaser';
 import { cartToIso } from './iso.js';
 import { PAL, mulberry32, hashStr, drawBuilding, drawTree } from './look.js';
 import { spawnCats, spawnCars, spawnPeople, spawnGulls, updateNPCs } from './npcs.js';
+import { areaFromURL, gotoArea, fetchArea } from './area.js';
 
 const PX_M = 8; // vertical pixels per meter of height
 const OX = 400;
@@ -44,6 +45,45 @@ function lerpInt(a, b, t) {
   return Math.round(a + (b - a) * t);
 }
 
+let areaMap = null;
+let areaMarker = null;
+
+function wireAreaPicker() {
+  const openBtn = document.getElementById('change-area');
+  const modal = document.getElementById('area-modal');
+  if (!openBtn || !modal || openBtn.dataset.wired) return;
+  openBtn.dataset.wired = '1';
+  const cancel = document.getElementById('area-cancel');
+  const play = document.getElementById('area-play');
+  const home = document.getElementById('area-home');
+  openBtn.addEventListener('click', () => {
+    modal.style.display = 'block';
+    if (!areaMap) {
+      const c = window.__areaCenter || { lat: 41.0615, lon: 29.0125 };
+      areaMap = window.L.map('area-map').setView([c.lat, c.lon], 15);
+      window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors',
+      }).addTo(areaMap);
+      areaMarker = window.L.marker([c.lat, c.lon], { draggable: true }).addTo(areaMap);
+      areaMap.on('click', (e) => areaMarker.setLatLng(e.latlng));
+    } else {
+      const c = window.__areaCenter || { lat: 41.0615, lon: 29.0125 };
+      areaMap.setView([c.lat, c.lon], 15);
+      areaMarker.setLatLng([c.lat, c.lon]);
+    }
+    setTimeout(() => areaMap && areaMap.invalidateSize(), 50);
+  });
+  if (cancel) cancel.addEventListener('click', () => { modal.style.display = 'none'; });
+  if (play) play.addEventListener('click', () => {
+    const ll = areaMarker.getLatLng();
+    gotoArea(ll.lat, ll.lng);
+  });
+  if (home) home.addEventListener('click', () => {
+    window.location.search = '';
+  });
+}
+
 class MainScene extends Phaser.Scene {
   constructor() {
     super('main');
@@ -69,10 +109,35 @@ class MainScene extends Phaser.Scene {
 
     this.paintSky();
 
-    fetch('data/darphane.json')
-      .then((r) => (r.ok ? r.json() : FALLBACK))
-      .catch(() => FALLBACK)
-      .then((data) => this.buildWorld(data));
+    wireAreaPicker();
+    const a = areaFromURL();
+    if (a) {
+      const loading = document.getElementById('area-loading');
+      if (loading) loading.style.display = 'block';
+      fetchArea(a.lat, a.lon)
+        .then((data) => {
+          if (loading) loading.style.display = 'none';
+          this.buildWorld(data);
+        })
+        .catch((err) => {
+          if (loading) loading.style.display = 'none';
+          const toast = document.getElementById('area-err');
+          if (toast) {
+            toast.textContent = String((err && err.message) || err || 'Area load failed');
+            toast.style.display = 'block';
+            setTimeout(() => { toast.style.display = 'none'; }, 4000);
+          }
+          fetch('data/darphane.json')
+            .then((r) => (r.ok ? r.json() : FALLBACK))
+            .catch(() => FALLBACK)
+            .then((data) => this.buildWorld(data));
+        });
+    } else {
+      fetch('data/darphane.json')
+        .then((r) => (r.ok ? r.json() : FALLBACK))
+        .catch(() => FALLBACK)
+        .then((data) => this.buildWorld(data));
+    }
   }
 
   // Warm daylight sky: fixed bands top #FFE9C4 -> horizon #FFD9A8.
@@ -97,6 +162,7 @@ class MainScene extends Phaser.Scene {
     const g = this.add.graphics();
     const meta = data.meta || {};
     const center = meta.center || { lat: 41.0615, lon: 29.0125 };
+    window.__areaCenter = center;
     const kx = 111320 * Math.cos((center.lat * Math.PI) / 180);
     const toCart = ([a, b]) =>
       a > 10 && Math.abs(b) > 10

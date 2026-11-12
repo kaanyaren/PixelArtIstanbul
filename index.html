@@ -44,6 +44,8 @@
   }
 }
 </script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
 <div id="select">
@@ -52,6 +54,7 @@
   <button data-tint="0x4d8ac2">Blue</button>
   <button data-tint="0xc25d4d">Red</button>
   <span>WASD / Arrows to move</span>
+  <button id="change-area">📍 Change area</button>
 </div>
 <div id="game"></div>
 <div id="zoom-ui">
@@ -64,6 +67,18 @@
   <span></span><button id="dpad-down" aria-label="Down">▼</button><span></span>
 </div>
 <div id="hud">© OpenStreetMap contributors ODbL</div>
+<div id="area-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(90,70,50,0.55);padding:4vh 4vw;box-sizing:border-box;">
+  <div style="background:#FFEDCB;border:2px solid #C9A86A;border-radius:12px;max-width:640px;margin:0 auto;padding:12px;color:#5A4632;font-family:monospace;">
+    <div id="area-map" style="height:60vh;width:100%;border:2px solid #C9A86A;border-radius:8px;"></div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+      <button id="area-play" style="font-family:monospace;padding:8px 14px;cursor:pointer;background:#5A4632;color:#FFEDCB;border:2px solid #C9A86A;border-radius:10px;">Play this area</button>
+      <button id="area-cancel" style="font-family:monospace;padding:8px 14px;cursor:pointer;background:#FFEDCB;color:#5A4632;border:2px solid #C9A86A;border-radius:10px;">Cancel</button>
+      <button id="area-home" style="font-family:monospace;padding:8px 14px;cursor:pointer;background:#FFEDCB;color:#5A4632;border:2px solid #C9A86A;border-radius:10px;">Back to Darphane</button>
+    </div>
+  </div>
+</div>
+<div id="area-loading" style="display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:101;background:#5A4632;color:#FFEDCB;font-family:monospace;padding:8px 16px;border-radius:10px;border:2px solid #C9A86A;">Loading streets…</div>
+<div id="area-err" style="display:none;position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:101;background:#7a2e22;color:#FFEDCB;font-family:monospace;padding:8px 16px;border-radius:10px;border:2px solid #C9A86A;"></div>
 <script type="module" src="src/main.js"></script>
 </body>
 </html>

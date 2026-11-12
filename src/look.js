@@ -232,7 +232,12 @@ export function drawBuilding(g, base, opts = {}) {
   if (isShop) {
     // Shopfront: colored sign band spanning front face + tiny door + step.
     const band = [0xC0392B, 0x2A9D8F, 0xE67E22, 0x2E5FA3][(rng() * 4) | 0];
-    const l = wallPoint(pF, Q, tF, tQ, 0.08, 0.1), r = wallPoint(pF, Q, tF, tQ, 0.92, 0.1);
+    let l = wallPoint(pF, Q, tF, tQ, 0.08, 0.1), r = wallPoint(pF, Q, tF, tQ, 0.92, 0.1);
+    if (Math.abs(r.x - l.x) > 120) {
+      const cx = (l.x + r.x) / 2;
+      l = { x: cx - 60, y: l.y };
+      r = { x: cx + 60, y: r.y };
+    }
     g.fillStyle(band, 1);
     g.fillRect(Math.min(l.x, r.x), Math.min(l.y, r.y) - 3, Math.abs(r.x - l.x), 6);
     g.fillStyle(0xF7F2E7, 1);
@@ -261,8 +266,11 @@ export function drawBuilding(g, base, opts = {}) {
   if (rng() < 0.3) {
     const aw = PAL.awning[(rng() * PAL.awning.length) | 0];
     const y0 = wallPoint(pF, Q, tF, tQ, 0.5, 0.06);
+    const faceLen = Math.max(1, Math.hypot(Q.x - pF.x, Q.y - pF.y));
+    const span = Math.min(0.7, 120 / faceLen);
+    const a0 = 0.5 - span / 2;
     for (let i = 0; i < 6; i++) {
-      const u0 = 0.15 + (0.7 * i) / 6, u1 = 0.15 + (0.7 * (i + 1)) / 6;
+      const u0 = a0 + (span * i) / 6, u1 = a0 + (span * (i + 1)) / 6;
       const a = wallPoint(pF, Q, tF, tQ, u0, 0.06), b = wallPoint(pF, Q, tF, tQ, u1, 0.06);
       g.fillStyle(i % 2 ? 0xF7F2E7 : aw, 1);
       g.fillRect(Math.min(a.x, b.x), y0.y - 2, Math.abs(b.x - a.x) + 1, 7);
