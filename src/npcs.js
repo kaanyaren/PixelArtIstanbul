@@ -197,7 +197,7 @@ export function spawnCats(scene, count) {
     const ci = Math.floor(Math.random() * CAT_DEFS.length), sitting = Math.random() < 0.3;
     const x = randBetween(bounds.x0, bounds.x1), y = randBetween(bounds.y0, bounds.y1);
     const sprite = scene.add.image(x, y, `npc-cat-${CAT_DEFS[ci].name}-${sitting ? 0 : 1}`);
-    sprite.setDepth(x + y + 20000);
+    sprite.setScale(2).setDepth(x + y + 20000);
     const t = pickTile(x, y, bounds, CAT_TILE);
     cats.push({ sprite, bounds, ci, frame: sitting ? 0 : 1, wag: randBetween(0, WAG_TIME), sitting, tx: t.x, ty: t.y, timer: randBetween(1, 3) });
   }
@@ -211,7 +211,7 @@ export function spawnCats(scene, count) {
       y = Math.min(Math.max(p.y + (Math.random() < 0.5 ? -14 : 14), bounds.y0), bounds.y1);
     }
     const sprite = scene.add.image(x, y, 'npc-dog');
-    sprite.setDepth(x + y + 20000);
+    sprite.setScale(2).setDepth(x + y + 20000);
     if (Math.random() < 0.5) sprite.setFlipX(true);
   }
 }
@@ -227,12 +227,12 @@ export function spawnCars(scene, count) {
     if (i < parked) {
       const p = pts[i % pts.length];
       const sprite = scene.add.image(p.x, p.y + 8, key);
-      sprite.setDepth(p.y + 8 + 20000);
+      sprite.setScale(2).setDepth(p.y + 8 + 20000);
       cars.push({ sprite, pts, seg: 0, speed: 0, parked: true });
     } else {
       const seg = Math.floor(Math.random() * pts.length) % pts.length;
       const sprite = scene.add.image(pts[seg].x, pts[seg].y, key);
-      sprite.setDepth(pts[seg].y + 20000);
+      sprite.setScale(2).setDepth(pts[seg].y + 20000);
       cars.push({ sprite, pts, seg, speed: CAR_SPEED, parked: false });
     }
   }
@@ -242,7 +242,7 @@ export function spawnCars(scene, count) {
     const x = Math.min(Math.max(p.x + randBetween(-20, 20), bounds.x0), bounds.x1);
     const y = Math.min(Math.max(p.y + (Math.random() < 0.5 ? -10 : 10), bounds.y0), bounds.y1);
     const sprite = scene.add.image(x, y, 'npc-simitci');
-    sprite.setDepth(y + 20000);
+    sprite.setScale(2).setDepth(y + 20000);
   }
 }
 export function spawnPeople(scene, count) {
@@ -251,15 +251,17 @@ export function spawnPeople(scene, count) {
   for (let i = 0; i < n; i++) {
     const si = Math.floor(Math.random() * SHIRTS.length);
     let x = randBetween(bounds.x0, bounds.x1), y = randBetween(bounds.y0, bounds.y1);
+    let path = null;
     if (roads.length > 0) {
       const pts = roads[i % roads.length], p = pts[Math.floor(Math.random() * pts.length)];
       x = Math.min(Math.max(p.x + randBetween(-40, 40), bounds.x0), bounds.x1);
       y = Math.min(Math.max(p.y + (Math.random() < 0.5 ? -12 : 12), bounds.y0), bounds.y1);
+      path = pts;
     }
     const sprite = scene.add.image(x, y, `npc-person-${si}-0`);
-    sprite.setDepth(x + y + 20000);
-    const t = pickTile(x, y, bounds, PERSON_TILE);
-    people.push({ sprite, bounds, si, frame: 0, walk: 0, tx: t.x, ty: t.y, timer: randBetween(1, 3) });
+    sprite.setScale(2).setDepth(x + y + 20000);
+    const t = path ? path[(Math.floor(Math.random() * path.length)) % path.length] : pickTile(x, y, bounds, PERSON_TILE);
+    people.push({ sprite, bounds, si, frame: 0, walk: 0, tx: t.x + randBetween(-30, 30), ty: t.y + randBetween(-12, 12), timer: randBetween(1, 3), path });
   }
 }
 export function spawnGulls(scene, count) {
@@ -268,7 +270,7 @@ export function spawnGulls(scene, count) {
   const skyY1 = bounds.y0 + (bounds.y1 - bounds.y0) * 0.3;
   for (let i = 0; i < n; i++) {
     const sprite = scene.add.image(randBetween(bounds.x0, bounds.x1), randBetween(bounds.y0, skyY1), `npc-gull-${i % 2}`);
-    sprite.setDepth(30000);
+    sprite.setScale(2).setDepth(30000);
     const dir = Math.random() < 0.5 ? -1 : 1;
     gulls.push({ sprite, bounds, vx: dir * randBetween(12, 28), baseY: sprite.y, phase: randBetween(0, 6.28), flap: randBetween(0, WAG_TIME), frame: 0 });
   }
@@ -302,7 +304,17 @@ function updatePerson(p, dt) {
   p.walk += dt;
   if (p.walk >= WALK_TIME) { p.walk = 0; p.frame = 1 - p.frame; p.sprite.setTexture(`npc-person-${p.si}-${p.frame}`); }
   p.timer -= dt;
-  if (p.timer <= 0) { const t = pickTile(p.sprite.x, p.sprite.y, p.bounds, PERSON_TILE); p.tx = t.x; p.ty = t.y; p.timer = randBetween(1, 3); }
+  if (p.timer <= 0) {
+    if (p.path && p.path.length) {
+      const t = p.path[Math.floor(Math.random() * p.path.length)];
+      p.tx = t.x + randBetween(-30, 30);
+      p.ty = t.y + randBetween(-12, 12);
+    } else {
+      const t = pickTile(p.sprite.x, p.sprite.y, p.bounds, PERSON_TILE);
+      p.tx = t.x; p.ty = t.y;
+    }
+    p.timer = randBetween(1, 3);
+  }
   stepToward(p.sprite, p.tx, p.ty, PERSON_SPEED, dt);
   p.sprite.setDepth(p.sprite.x + p.sprite.y + 20000);
 }
@@ -319,8 +331,11 @@ export function updateNPCs(dt) {
   if (!dt || dt <= 0) return;
   const step = Math.min(dt, 0.1);
   gullTime += step;
-  for (const c of cats) if (c.sprite && c.sprite.active !== false) updateCat(c, step);
-  for (const c of cars) if (c.sprite && c.sprite.active !== false) updateCar(c, step);
-  for (const p of people) if (p.sprite && p.sprite.active !== false) updatePerson(p, step);
+  const sc = (cats[0]?.sprite?.scene || cars[0]?.sprite?.scene || people[0]?.sprite?.scene || gulls[0]?.sprite?.scene);
+  const night = sc?.cfg?.timeOfDay === 'night';
+  const tint = night ? 0xffe0b0 : 0xffffff;
+  for (const c of cats) if (c.sprite && c.sprite.active !== false) { updateCat(c, step); c.sprite.setTint(tint); }
+  for (const c of cars) if (c.sprite && c.sprite.active !== false) { updateCar(c, step); c.sprite.setTint(tint); }
+  for (const p of people) if (p.sprite && p.sprite.active !== false) { updatePerson(p, step); p.sprite.setTint(tint); }
   for (const gl of gulls) if (gl.sprite && gl.sprite.active !== false) updateGull(gl, step);
 }
