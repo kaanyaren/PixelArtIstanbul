@@ -6,6 +6,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { poiKind, greenKind, waterKind } from "../src/area.js";
 
 const CENTER = { lat: 41.0615, lon: 29.0125 };
 const BBOX = { south: 41.057009, west: 29.006548, north: 41.065991, east: 29.018452 };
@@ -64,15 +65,29 @@ function footprintArea(pts) {
 // Minimal OSM XML parse via regex (stdlib only, no deps).
 function parseOsmXml(xml) {
   const nodes = new Map();
-  for (const m of xml.matchAll(/<node\b[^>]*>/g)) {
-    const t = m[0];
-    const id = /id="(-?\d+)"/.exec(t)?.[1];
-    const lat = /lat="([\d.\-]+)"/.exec(t)?.[1];
-    const lon = /lon="([\d.\-]+)"/.exec(t)?.[1];
-    if (id && lat && lon) nodes.set(id, [parseFloat(lon), parseFloat(lat)]);
+  const pois = [];
+  for (const m of xml.matchAll(/<node\b([^>]*?)(\/>|>([\s\S]*?)<\/node>)/g)) {
+    const attrs = m[1];
+    const body = m[3] ?? "";
+    const id = /id="(-?\d+)"/.exec(attrs)?.[1];
+    const lat = /lat="([\d.\-]+)"/.exec(attrs)?.[1];
+    const lon = /lon="([\d.\-]+)"/.exec(attrs)?.[1];
+    if (!id || !lat || !lon) continue;
+    const pt = [parseFloat(lon), parseFloat(lat)];
+    nodes.set(id, pt);
+    if (!body) continue;
+    const tags = {};
+    for (const t of body.matchAll(/<tag\b[^>]*k="([^"]+)"[^>]*v="([^"]*)"/g)) tags[t[1]] = t[2];
+    const kind = poiKind(tags);
+    if (!kind) continue;
+    const name = tags.name ?? tags["name:tr"] ?? null;
+    pois.push(name ? { x: pt[0], y: pt[1], kind, name } : { x: pt[0], y: pt[1], kind });
   }
   const buildings = [];
   const roads = [];
+  const greens = [];
+  const waters = [];
+  const wayMap = new Map();
   for (const m of xml.matchAll(/<way\b[^>]*?\bid="(-?\d+)"[^>]*>([\s\S]*?)<\/way>/g)) {
     const id = m[1];
     const body = m[2];
@@ -81,6 +96,8 @@ function parseOsmXml(xml) {
     for (const t of body.matchAll(/<tag\b[^>]*k="([^"]+)"[^>]*v="([^"]*)"/g)) tags[t[1]] = t[2];
     const pts = refs.map((r) => nodes.get(r)).filter(Boolean);
     if (pts.length < 2) continue;
+    wayMap.set(id, pts);
+    const closed = refs.length > 2 && refs[0] === refs[refs.length - 1];
     if (tags.building) {
       const h = parseNum(tags.height ?? tags["building:height"]);
       const lv = parseNum(tags["building:levels"]);
@@ -92,12 +109,23 @@ function parseOsmXml(xml) {
         levels,
         height,
         color: tags["building:colour"] ?? tags.colour ?? tags.color ?? null,
+        type: tags.building,
+        name: tags.name ?? tags["name:tr"] ?? null,
       });
     } else if (tags.highway) {
       const hw = tags.highway.split(';')[0].trim();
       if (/^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|pedestrian|track|busway|footway|path|steps|cycleway|bridleway)(_link)?$/.test(hw)) {
         const name = tags.name ?? tags["name:tr"] ?? tags.alt_name ?? tags["name:en"] ?? null;
         roads.push({ id: `w${id}`, pts, name, kind: hw, refs });
+      }
+    }
+    // Green space / water: closed ways only (area polygons).
+    if (!tags.building && closed && pts.length >= 3) {
+      const g = greenKind(tags);
+      if (g) greens.push({ pts, kind: g });
+      else {
+        const w = waterKind(tags);
+        if (w) waters.push({ pts, kind: w });
       }
     }
   }
@@ -107,6 +135,18 @@ function parseOsmXml(xml) {
     const body = m[1];
     const tags = {};
     for (const t of body.matchAll(/<tag\b[^>]*k="([^"]+)"[^>]*v="([^"]*)"/g)) tags[t[1]] = t[2];
+    // Multipart green/water relations: concatenate member way geometry.
+    // ponytail: member order assumed as listed; fine for simple rings.
+    const g = greenKind(tags);
+    const w = waterKind(tags);
+    if (g || w) {
+      const pts = [];
+      for (const mem of body.matchAll(/<member\b[^>]*type="way"[^>]*ref="(-?\d+)"/g)) {
+        const mp = wayMap.get(mem[1]);
+        if (mp) for (const p of mp) pts.push(p);
+      }
+      if (pts.length >= 3) (g ? greens : waters).push({ pts, kind: g ?? w });
+    }
     const relName = tags.name ?? tags['name:tr'] ?? tags.alt_name;
     if ((tags.type === 'associatedStreet' || tags.type === 'street') && relName) {
       for (const w of body.matchAll(/<member\b[^>]*type="way"[^>]*ref="(-?\d+)"/g)) {
@@ -164,6 +204,10 @@ function parseOsmXml(xml) {
   };
   const keptB = buildings.filter(inBox);
   const keptR = roads.filter((r) => r.pts.some(([lo, la]) => lo >= BBOX.west && lo <= BBOX.east && la >= BBOX.south && la <= BBOX.north));
+  const inBBoxPt = (lo, la) => lo >= BBOX.west && lo <= BBOX.east && la >= BBOX.south && la <= BBOX.north;
+  const keptG = greens.filter((g) => g.pts.some(([lo, la]) => inBBoxPt(lo, la)));
+  const keptW = waters.filter((w) => w.pts.some(([lo, la]) => inBBoxPt(lo, la)));
+  const keptP = pois.filter((p) => inBBoxPt(p.x, p.y));
   buildings.length = 0;
   buildings.push(...keptB);
   roads.length = 0;
@@ -198,6 +242,9 @@ function parseOsmXml(xml) {
     meta: { center: CENTER, bbox: BBOX, source: "OpenStreetMap ODbL", sources: ["OpenStreetMap ODbL"] },
     buildings: buildings.slice(0, 500),
     roads,
+    greens: keptG,
+    waters: keptW,
+    pois: keptP,
   };
 }
 
@@ -329,7 +376,9 @@ async function main() {
     return; // exit 0
   }
 
-  console.log(`buildings=${json.buildings.length} roads=${json.roads.length}`);
+  console.log(
+    `buildings=${json.buildings.length} roads=${json.roads.length} greens=${json.greens.length} waters=${json.waters.length} pois=${json.pois.length}`,
+  );
   if (dryRun) return;
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify(json) + "\n");

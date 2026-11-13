@@ -1,6 +1,7 @@
 import * as Phaser from 'phaser';
 import { cartToIso } from './iso.js';
 import { PAL, STYLES, styleFor, mulberry32, hashStr, drawBuilding, drawTree } from './look.js';
+import { drawProp, drawPropShadow } from './props.js';
 import { spawnCats, spawnCars, spawnPeople, spawnGulls, updateNPCs } from './npcs.js';
 import { areaFromURL, gotoArea, fetchArea } from './area.js';
 import { SETTINGS, loadSettings, saveSettings, resetSettings } from './settings.js';
@@ -43,6 +44,16 @@ function bboxOf(pts) {
     minY: Math.min(...ys),
     maxY: Math.max(...ys),
   };
+}
+
+function pointInPoly(cx, cy, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    if (yi > cy !== yj > cy && cx < ((xj - xi) * (cy - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }
 
 function lerpInt(a, b, t) {
@@ -327,46 +338,110 @@ class MainScene extends Phaser.Scene {
       ],
       true,
     );
-    // Subtle block variation: 16m iso cells in 3 warm shades.
-    const cell = 16;
-    const nx = Math.ceil((maxX - minX) / cell);
-    const ny = Math.ceil((maxY - minY) / cell);
-    if (nx * ny <= 4000) {
-      const shades = [0xe8dcc0, 0xdcc9a4, 0xf2e7cc];
-      const rand = mulberry32(7);
-      for (let ix = 0; ix < nx; ix++) {
-        for (let iy = 0; iy < ny; iy++) {
-          const shade = shades[Math.floor(rand() * shades.length) % shades.length];
-          if (shade === 0xe8dcc0) continue;
-          const x0 = minX + ix * cell;
-          const y0 = minY + iy * cell;
-          const p0 = toScreen(x0, y0);
-          const p1 = toScreen(x0 + cell, y0);
-          const p2 = toScreen(x0 + cell, y0 + cell);
-          const p3 = toScreen(x0, y0 + cell);
-          g.fillStyle(shade, 1);
-          g.fillPoints(
-            [
-              new Phaser.Geom.Point(p0.x, p0.y),
-              new Phaser.Geom.Point(p1.x, p1.y),
-              new Phaser.Geom.Point(p2.x, p2.y),
-              new Phaser.Geom.Point(p3.x, p3.y),
-            ],
-            true,
-          );
+
+    // Paving joints: 20m grid, the way a stone plaza reads in an iso game.
+    g.lineStyle(1, 0xd3bf98, 0.28);
+    for (let x = minX; x <= maxX; x += 20) {
+      const a = toScreen(x, minY);
+      const b = toScreen(x, maxY);
+      g.lineBetween(a.x, a.y, b.x, b.y);
+    }
+    for (let y = minY; y <= maxY; y += 20) {
+      const a = toScreen(minX, y);
+      const b = toScreen(maxX, y);
+      g.lineBetween(a.x, a.y, b.x, b.y);
+    }
+    // Worn earth patches + weeds so the empty ground is not a blank sheet.
+    const grand = mulberry32(31);
+    for (let i = 0; i < 70; i++) {
+      const px = minX + grand() * (maxX - minX);
+      const py = minY + grand() * (maxY - minY);
+      const p = toScreen(px, py);
+      if (grand() < 0.4) {
+        g.fillStyle(0xd7c19c, 0.16);
+        g.fillEllipse(p.x, p.y, 22 + grand() * 40, 9 + grand() * 16);
+      } else {
+        g.fillStyle(0x6E9B6A, 0.45);
+        g.fillRect(p.x, p.y, 2, 3);
+      }
+    }
+
+    // Parks, gardens, grass and water from OSM landuse/natural.
+    const GREEN_COL = {
+      park: 0x7FA05A, garden: 0x86AC60, pitch: 0x8CA968, grass: 0x94B36A,
+      forest: 0x5E8450, cemetery: 0x8FA383, playground: 0x9BB07A, meadow: 0x9FBA72,
+      allotments: 0x8FAE64, village_green: 0x86AC60, recreation_ground: 0x8AAE62,
+    };
+    const greenCart = [];
+    const waterCart = [];
+    for (const gr of data.greens || []) {
+      const cart = (gr.pts || []).map(toCart);
+      if (cart.length < 3) continue;
+      greenCart.push(cart);
+      const scr = cart.map(([x, y]) => toScreen(x, y));
+      g.fillStyle(GREEN_COL[gr.kind] ?? 0x7FA05A, 1);
+      g.fillPoints(scr.map((p) => new Phaser.Geom.Point(p.x, p.y)), true);
+      g.lineStyle(2, 0x4E6B3C, 0.8);
+      g.strokePoints(scr.map((p) => new Phaser.Geom.Point(p.x, p.y)), true);
+      // Scatter trees and bushes inside the green.
+      const prand = mulberry32(hashStr(`green-${gr.kind}-${cart.length}`));
+      let xs = cart.map((p) => p[0]), ys = cart.map((p) => p[1]);
+      const x0 = Math.min(...xs), x1 = Math.max(...xs);
+      const y0 = Math.min(...ys), y1 = Math.max(...ys);
+      const tries = Math.min(40, Math.round(((x1 - x0) * (y1 - y0)) / 400));
+      for (let i = 0; i < tries; i++) {
+        const tx = x0 + prand() * (x1 - x0);
+        const ty = y0 + prand() * (y1 - y0);
+        if (!pointInPoly(tx, ty, cart)) continue;
+        const p = toScreen(tx, ty);
+        if (prand() < 0.6) drawTree(g, p.x, p.y, (prand() * 1e9) | 0, 0.75);
+        else {
+          g.fillStyle(0x4E7A52, 1);
+          g.fillEllipse(p.x, p.y - 3, 9, 6);
+          g.fillStyle(0x6E9B6A, 1);
+          g.fillEllipse(p.x - 1, p.y - 5, 5, 3);
         }
+      }
+    }
+    for (const wt of data.waters || []) {
+      const cart = (wt.pts || []).map(toCart);
+      if (cart.length < 2) continue;
+      waterCart.push(cart);
+      const scr = cart.map(([x, y]) => toScreen(x, y));
+      g.fillStyle(0x4E7FA8, 1);
+      g.fillPoints(scr.map((p) => new Phaser.Geom.Point(p.x, p.y)), true);
+      g.lineStyle(2, 0xA8CBDF, 0.9);
+      g.strokePoints(scr.map((p) => new Phaser.Geom.Point(p.x, p.y)), true);
+      // Ripple dashes.
+      g.lineStyle(1, 0x8FB6D8, 0.8);
+      for (const [cx, cy] of cart) {
+        const p = toScreen(cx, cy);
+        g.lineBetween(p.x - 5, p.y, p.x + 1, p.y);
+        g.lineBetween(p.x + 3, p.y + 3, p.x + 9, p.y + 3);
       }
     }
 
     // Streets: differentiated by road kind.
+    // Widths are real metres. Screen width = metres * ROAD_PX, compressed a
+    // little against the 8.94px/m iso scale so the street grid stays readable.
+    const ROAD_PX = 6.3;
+    const ROAD_M = {
+      motorway: [26, 19], trunk: [23, 16], primary: [22, 15], secondary: [16, 11],
+      tertiary: [13, 9], residential: [10, 7], unclassified: [9, 6], living_street: [9, 6],
+      service: [8, 5.5], busway: [9, 6], track: [7, 5], pedestrian: [4.5, 3],
+      footway: [4.5, 3], path: [4, 2.5], steps: [3.5, 2.5],
+    };
     const drivable = new Set(['primary', 'trunk', 'motorway', 'secondary', 'tertiary', 'residential']);
     const roadStyles = roadLines.map((_, ri) => {
       const kind = roadMeta[ri]?.kind;
-      if (kind === 'steps') return { baseW: 8, surfW: 6, surfCol: 0xbaa992, type: 'steps' };
-      if (kind === 'footway' || kind === 'pedestrian' || kind === 'path') return { baseW: 8, surfW: 6, surfCol: 0xbfae97, type: 'walkway' };
-      if (kind === 'primary' || kind === 'trunk' || kind === 'motorway') return { baseW: 22, surfW: 17, surfCol: 0x55524e, dashStep: 2.5, dashCol: 0xf0d060, dual: true, type: 'road' };
-      if (kind === 'secondary' || kind === 'tertiary') return { baseW: 16, surfW: 12, surfCol: 0x767068, dashStep: 2, dashCol: 0xf5ead0, dual: false, type: 'road' };
-      return { baseW: 13, surfW: 9, surfCol: 0x9a9184, dashStep: 2, dashCol: 0xf5ead0, dual: false, type: 'road' };
+      const base = kind || '';
+      const w = ROAD_M[base] || ROAD_M[base.replace(/_link$/, '')] || ROAD_M.residential;
+      const [baseM, surfM] = w;
+      if (kind === 'steps') return { baseW: baseM * ROAD_PX, surfW: surfM * ROAD_PX, surfCol: 0xbaa992, type: 'steps', halfM: baseM / 2 };
+      if (kind === 'footway' || kind === 'pedestrian' || kind === 'path') return { baseW: baseM * ROAD_PX, surfW: surfM * ROAD_PX, surfCol: 0xbfae97, type: 'walkway', halfM: baseM / 2 };
+      if (kind === 'primary' || kind === 'trunk' || kind === 'motorway') return { baseW: baseM * ROAD_PX, surfW: surfM * ROAD_PX, surfCol: 0x55524e, dashStep: 2.5, dashCol: 0xf0d060, dual: true, type: 'road', halfM: baseM / 2 };
+      if (kind === 'secondary' || kind === 'tertiary') return { baseW: baseM * ROAD_PX, surfW: surfM * ROAD_PX, surfCol: 0x767068, dashStep: 2, dashCol: 0xf5ead0, dual: false, type: 'road', halfM: baseM / 2 };
+      return { baseW: baseM * ROAD_PX, surfW: surfM * ROAD_PX, surfCol: 0x9a9184, dashStep: 2, dashCol: 0xf5ead0, dual: false, type: 'road', halfM: baseM / 2 };
     });
 
     const roadScr = roadLines.map((line) => line.map(([x, y]) => toScreen(x, y)));
@@ -380,13 +455,49 @@ class MainScene extends Phaser.Scene {
       }
     });
 
-    // 2. Road surface pass
+    // 2. Kerb strip: the metre of stone between pavement and asphalt.
+    roadLines.forEach((line, ri) => {
+      const s = roadStyles[ri];
+      const w = Math.max(1, s.baseW - s.surfW);
+      g.lineStyle(w, 0xc4ae8c, 1);
+      const scr = roadScr[ri];
+      for (let i = 0; i + 1 < line.length; i++) {
+        g.lineBetween(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
+      }
+    });
+
+    // 3. Road surface pass
     roadLines.forEach((line, ri) => {
       const s = roadStyles[ri];
       g.lineStyle(s.surfW, s.surfCol, 1);
       const scr = roadScr[ri];
       for (let i = 0; i + 1 < line.length; i++) {
         g.lineBetween(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
+      }
+    });
+
+    // 3b. Pavement joints every ~6m so sidewalks read as slabs, not a smear.
+    roadLines.forEach((line, ri) => {
+      const s = roadStyles[ri];
+      if (s.baseW - s.surfW < 4) return;
+      const half = (s.baseW + s.surfW) / 4;
+      let acc = 0;
+      for (let i = 0; i + 1 < line.length; i++) {
+        const segLen = Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]);
+        if (segLen < 0.5) continue;
+        const dx = (line[i + 1][0] - line[i][0]) / segLen;
+        const dy = (line[i + 1][1] - line[i][1]) / segLen;
+        while (acc < segLen) {
+          const t = acc / segLen;
+          const px = line[i][0] + (line[i + 1][0] - line[i][0]) * t;
+          const py = line[i][1] + (line[i + 1][1] - line[i][1]) * t;
+          const a = toScreen(px - dy * half, py + dx * half);
+          const b = toScreen(px + dy * half, py - dx * half);
+          g.lineStyle(1, 0xbfa88a, 0.7);
+          g.lineBetween(a.x, a.y, b.x, b.y);
+          acc += 6;
+        }
+        acc -= segLen;
       }
     });
 
@@ -540,8 +651,9 @@ class MainScene extends Phaser.Scene {
             const [bx, by] = line[seg + 1];
             const dx = (bx - ax) / sLen;
             const dy = (by - ay) / sLen;
-            const lx = ax + (bx - ax) * t + -dy * 4 * side;
-            const ly = ay + (by - ay) * t + dx * 4 * side;
+            const off = (roadStyles[ri].halfM ?? 5) + 0.6;
+            const lx = ax + (bx - ax) * t + -dy * off * side;
+            const ly = ay + (by - ay) * t + dx * off * side;
             side = -side;
             const p = toScreen(lx, ly);
             g.lineStyle(3, 0x555555, 1);
@@ -561,6 +673,7 @@ class MainScene extends Phaser.Scene {
     }
 
     // Buildings far-first: sort by (minX + minY), seeded facade via look.js.
+    const nameCands = [];
     buildings.sort((p, q) => p.bb.minX + p.bb.minY - (q.bb.minX + q.bb.minY));
     for (const { b, cart, bb } of buildings) {
       const base = cart.map(([x, y]) => toScreen(x, y));
@@ -574,6 +687,13 @@ class MainScene extends Phaser.Scene {
       const floors = Math.max(1, Math.round(b.height / 3));
       drawBuilding(g, base, { heightPx: b.height * PX_M, seed, floors, facade, style });
       this.bboxes.push(bb);
+      if (b.name && b.name !== b.landmark) {
+        nameCands.push({
+          name: b.name,
+          x: base.reduce((s, p) => s + p.x, 0) / base.length,
+          y: base.reduce((s, p) => s + p.y, 0) / base.length,
+        });
+      }
       if (b.landmark) {
         const lcx = base.reduce((s, p) => s + p.x, 0) / base.length;
         const topY = Math.min(...base.map((p) => p.y)) - b.height * PX_M - 30;
@@ -613,8 +733,9 @@ class MainScene extends Phaser.Scene {
         const dx = (bx - ax) / segLen;
         const dy = (by - ay) / segLen;
         const side = k % 2 === 0 ? 1 : -1;
-        const px = ax + (bx - ax) * t + -dy * 4 * side;
-        const py = ay + (by - ay) * t + dx * 4 * side;
+        const off = (roadStyles[ri].halfM ?? 5) + 1.2;
+        const px = ax + (bx - ax) * t + -dy * off * side;
+        const py = ay + (by - ay) * t + dx * off * side;
         void dx;
         void dy;
         const p = toScreen(px, py);
@@ -630,8 +751,26 @@ class MainScene extends Phaser.Scene {
       drawTree(g, p.x, p.y, seed ^ 0x9e37);
     }
 
+    // Points of interest: small street props from OSM.
+    const poiNames = [];
+    for (const poi of data.pois || []) {
+      if (!poi || !Number.isFinite(poi.x) || !Number.isFinite(poi.y)) continue;
+      const [cx, cy] = toCart([poi.x, poi.y]);
+      // Skip props that would sit inside a building footprint.
+      if (this.bboxes.some((b) => cx >= b.minX && cx <= b.maxX && cy >= b.minY && cy <= b.maxY)) continue;
+      const sp = toScreen(cx, cy);
+      const seed = hashStr(`${poi.kind}:${Math.round(poi.x * 1e5)},${Math.round(poi.y * 1e5)}`);
+      drawPropShadow(g, sp.x, sp.y);
+      drawProp(g, sp.x, sp.y, poi.kind || 'other', seed);
+      if (poi.name && /cafe|restaurant|bar|pub|shop|market|pharmacy|hospital|school|mosque|hotel|bank|museum|library|post|police|townhall|fountain|park|viewpoint/.test(poi.kind)) {
+        poiNames.push({ name: poi.name, x: sp.x, y: sp.y });
+      }
+    }
+
     // Screen-space road loops for cars (NPC module reads scene.roads).
+
     this.roads = roadLines.map((line) => line.map(([x, y]) => toScreen(x, y)));
+    this.buildMinimap(buildings.map((b) => b.cart), roadLines, greenCart, waterCart);
 
     // Player start: exactly the dropped pin (area center = 0,0), spiralled out of walls.
     this.cartX = 0;
@@ -804,12 +943,172 @@ class MainScene extends Phaser.Scene {
           .setVisible(!!this.cfg.labels);
         this.labelObjects.push(label);
       }
+      // POI and building names: horizontal, only when close.
+      const extras = [
+        ...(typeof poiNames !== 'undefined' ? poiNames : []),
+        ...(typeof nameCands !== 'undefined' ? nameCands : []),
+      ];
+      for (const c of extras) {
+        if (shown.length >= 42) break;
+        const d = Math.hypot(px - c.x, py - c.y);
+        if (d > 900) continue;
+        if (shown.some((s) => Math.hypot(s.x - c.x, s.y - c.y) < 70)) continue;
+        shown.push(c);
+        const label = this.add
+          .text(c.x, c.y - 14, c.name, {
+            fontFamily: 'monospace',
+            fontSize: '10px',
+            color: '#3a2f22',
+            backgroundColor: '#FFF4D8',
+            padding: { x: 3, y: 1 },
+          })
+          .setOrigin(0.5)
+          .setDepth(c.x + c.y + 15010)
+          .setVisible(!!this.cfg.labels);
+        this.labelObjects.push(label);
+      }
     }
     spawnCats(this, Math.round(8 * this.cfg.life));
     spawnCars(this, Math.round(5 * this.cfg.life));
     spawnPeople(this, Math.round(6 * this.cfg.life));
     spawnGulls(this, Math.round(5 * this.cfg.life));
     this.buildSettingsUI();
+    this.wireHud();
+  }
+
+  // Mini map: static city plan drawn once, player dot refreshed each frame.
+  buildMinimap(bldCart, roadLines, greenCart, waterCart) {
+    const host = document.getElementById('minimap');
+    if (!host) return;
+    const size = 160;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const layer = document.createElement('canvas');
+    layer.width = size * dpr;
+    layer.height = size * dpr;
+    const lctx = layer.getContext('2d');
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lctx.fillStyle = '#EFE3CB';
+    lctx.fillRect(0, 0, size, size);
+
+    const pts = [];
+    for (const c of bldCart) for (const p of c) pts.push(p);
+    for (const line of roadLines) for (const p of line) pts.push(p);
+    if (!pts.length) return;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [x, y] of pts) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    const pad = 20;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    // Iso, same as the world: x -> (+1,+0.5), y -> (-1,+0.5).
+    const sx = size / (maxX - minX + maxY - minY);
+    const px = (x, y) => ((x - minX - (y - minY)) * sx + size / 2);
+    const py = (x, y) => ((x - minX + (y - minY)) * sx * 0.5 + size / 2);
+
+    const poly = (ctx, c) => {
+      ctx.beginPath();
+      c.forEach(([x, y], i) => (i ? ctx.lineTo(px(x, y), py(x, y)) : ctx.moveTo(px(x, y), py(x, y))));
+      ctx.closePath();
+      ctx.fill();
+    };
+    lctx.fillStyle = '#7FA05A';
+    for (const c of greenCart) poly(lctx, c);
+    lctx.fillStyle = '#4E7FA8';
+    for (const c of waterCart) poly(lctx, c);
+    lctx.fillStyle = '#CBBBA0';
+    for (const c of bldCart) poly(lctx, c);
+    lctx.strokeStyle = '#8A8378';
+    lctx.lineWidth = 1.6;
+    for (const line of roadLines) {
+      lctx.beginPath();
+      line.forEach(([x, y], i) => (i ? lctx.lineTo(px(x, y), py(x, y)) : lctx.moveTo(px(x, y), py(x, y))));
+      lctx.stroke();
+    }
+    // The dropped pin.
+    lctx.strokeStyle = '#B5432F';
+    lctx.lineWidth = 1.4;
+    lctx.beginPath();
+    lctx.arc(px(0, 0), py(0, 0), 4, 0, Math.PI * 2);
+    lctx.stroke();
+
+    let cv = host.querySelector('canvas');
+    if (!cv) {
+      cv = document.createElement('canvas');
+      host.appendChild(cv);
+    }
+    cv.width = size * dpr;
+    cv.height = size * dpr;
+    cv.style.width = size + 'px';
+    cv.style.height = size + 'px';
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.mini = { ctx, size, layer, px, py };
+    this.updateMinimap();
+  }
+
+  updateMinimap() {
+    const m = this.mini;
+    if (!m) return;
+    const ctx = m.ctx;
+    ctx.clearRect(0, 0, m.size, m.size);
+    ctx.drawImage(m.layer, 0, 0, m.size, m.size);
+    const x = m.px(this.cartX, this.cartY);
+    const y = m.py(this.cartX, this.cartY);
+    ctx.fillStyle = '#B5432F';
+    ctx.beginPath();
+    ctx.arc(x, y, 3.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+
+  wireHud() {
+    const areaEl = document.getElementById('hud-area');
+    const coordEl = document.getElementById('hud-coords');
+    const c = window.__areaCenter || { lat: 41.0615, lon: 29.0125 };
+    if (coordEl) coordEl.textContent = `${c.lat.toFixed(4)}°N, ${c.lon.toFixed(4)}°E`;
+    if (areaEl) {
+      const url = areaFromURL();
+      areaEl.textContent = url ? 'Dropped pin area' : 'Darphane · Istanbul';
+    }
+    const help = document.getElementById('help-modal');
+    const openHelp = () => { if (help) help.style.display = 'block'; };
+    const closeHelp = () => { if (help) help.style.display = 'none'; };
+    for (const id of ['btn-help', 'help-open']) {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('click', openHelp);
+    }
+    const helpClose = document.getElementById('help-close');
+    if (helpClose) helpClose.addEventListener('click', closeHelp);
+    const fs = document.getElementById('btn-fullscreen');
+    if (fs) {
+      fs.addEventListener('click', () => {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen?.();
+      });
+    }
+    const reset = document.getElementById('btn-reset-view');
+    if (reset) {
+      reset.addEventListener('click', () => {
+        if (!this.player) return;
+        this.cameras.main.stopFollow();
+        this.cameras.main.centerOn(this.player.x, this.player.y);
+        this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
+      });
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeHelp();
+        const sm = document.getElementById('settings-modal');
+        if (sm) sm.style.display = 'none';
+        const am = document.getElementById('area-modal');
+        if (am) am.style.display = 'none';
+      }
+    });
   }
 
   // Settings dialog: rows built from SETTINGS, live-applied where possible.
@@ -987,6 +1286,11 @@ class MainScene extends Phaser.Scene {
       this.player.setTexture(`walk-${this.walkSet}-0`);
     }
     this.syncPlayer();
+    this._miniT = (this._miniT || 0) + dt;
+    if (this._miniT > 0.15) {
+      this._miniT = 0;
+      this.updateMinimap();
+    }
   }
 
   syncPlayer() {

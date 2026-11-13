@@ -8,20 +8,35 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #F5DFB8; color: #5A4632; font-family: monospace; }
   body { display: flex; flex-direction: column; height: 100dvh; }
-  #select { flex: 0 0 auto; }
-  #game { flex: 1 1 auto; position: relative; min-height: 0; }
-  #game canvas { image-rendering: pixelated; display: block; margin: 0; width: 100% !important; height: 100% !important; }
-  #hud { flex: 0 0 auto; text-align: center; font-size: 12px; padding: 6px; color: #5A4632; }
-  #select { text-align: center; padding: 8px; color: #5A4632; }
+
+  /* Top bar: groups wrap into rows when the viewport is narrow. */
+  #select { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 10px; padding: 8px; color: #5A4632; }
+  .sel-group { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; }
+  .sel-label { font-size: 12px; }
+  .sel-hint { font-size: 12px; opacity: 0.75; }
+  .sel-sep { opacity: 0.5; }
   #select button {
-    font-family: monospace; margin: 0 6px; padding: 8px 14px; cursor: pointer;
+    font-family: monospace; margin: 0; padding: 8px 14px; min-height: 40px; cursor: pointer;
     background: #FFEDCB; color: #5A4632; border: 2px solid #C9A86A; border-radius: 10px;
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
   #select button:hover { background: #FFE3AC; }
   .walker-btn.active, .tod-btn.active { background: #5A4632 !important; color: #FFEDCB !important; font-weight: bold; border-color: #3e2f22 !important; }
+
+  /* Game area: the canvas fills it, the floating controls live inside it. */
+  #game { flex: 1 1 auto; position: relative; min-height: 0; overflow: hidden; }
+  #game canvas { image-rendering: pixelated; display: block; margin: 0; width: 100% !important; height: 100% !important; }
+
+  #minimap {
+    position: absolute; left: 12px; bottom: 12px; z-index: 40;
+    width: 160px; height: 160px; overflow: hidden;
+    background: #FFEDCB; border: 2px solid #C9A86A; border-radius: 12px;
+    box-shadow: 0 2px 6px rgba(90,70,50,0.25);
+  }
+  #minimap canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+
   #touch-ui {
-    position: fixed; right: 12px; bottom: 12px; z-index: 50;
+    position: absolute; right: 12px; bottom: 12px; z-index: 50;
     display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px);
     gap: 4px; user-select: none; -webkit-user-select: none; touch-action: none;
   }
@@ -32,7 +47,7 @@
   }
   #touch-ui button:active { background: #FFE3AC; }
   #zoom-ui {
-    position: fixed; right: 12px; top: 64px; z-index: 50;
+    position: absolute; right: 12px; top: 12px; z-index: 50;
     display: flex; flex-direction: column; gap: 6px;
     user-select: none; -webkit-user-select: none;
   }
@@ -42,6 +57,21 @@
     border: 2px solid #C9A86A; border-radius: 10px;
   }
   #zoom-ui button:active { background: #FFE3AC; }
+
+  /* HUD strip: one line, long values ellipsize, controls pinned right. */
+  #hud { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 6px 10px; font-size: 12px; color: #5A4632; border-top: 1px solid #C9A86A; }
+  .hud-info { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 10px; overflow: hidden; }
+  #hud-area { flex: 0 1 auto; min-width: 0; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #hud-coords { flex: 0 0 auto; white-space: nowrap; opacity: 0.85; }
+  .hud-attr { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.75; }
+  .hud-controls { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .hud-controls button {
+    font-family: monospace; min-width: 40px; min-height: 40px; padding: 0 8px; font-size: 15px; cursor: pointer;
+    background: #FFEDCB; color: #5A4632; border: 2px solid #C9A86A; border-radius: 10px;
+  }
+  .hud-controls button:hover { background: #FFE3AC; }
+  .hud-controls button:active { background: #FFE3AC; }
+
   .settings-panel { background:#FFEDCB; color:#5A4632; border:2px solid #C9A86A; border-radius:12px; max-width:460px; margin:0 auto; padding:16px; font-family:monospace; max-height:85vh; overflow:auto; }
   .settings-panel h2 { margin:0 0 12px; font-size:16px; }
   .set-row { display:grid; grid-template-columns:1fr auto; gap:6px 10px; align-items:center; padding:8px 0; border-bottom:1px dashed #E0C79A; }
@@ -51,10 +81,28 @@
   .set-row select { grid-column:2; font-family:monospace; padding:4px; background:#FFF7E4; border:2px solid #C9A86A; border-radius:8px; color:#5A4632; }
   .set-row input[type=checkbox] { width:18px; height:18px; accent-color:#B5432F; }
   .settings-footer { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; justify-content:flex-end; }
-  .settings-footer button { font-family:monospace; padding:8px 14px; cursor:pointer; background:#FFEDCB; color:#5A4632; border:2px solid #C9A86A; border-radius:10px; }
+  .settings-footer button { font-family:monospace; padding:8px 14px; min-height:40px; cursor:pointer; background:#FFEDCB; color:#5A4632; border:2px solid #C9A86A; border-radius:10px; }
   .settings-footer button:hover { background:#FFE3AC; }
   #settings-apply { background:#5A4632; color:#FFEDCB; }
   .settings-footer button:disabled { opacity:0.5; cursor:default; }
+  .help-list { margin:0; padding-left:18px; font-size:13px; line-height:1.8; }
+  .help-list b { color:#B5432F; }
+  #area-modal, #settings-modal, #help-modal { overflow:auto; }
+
+  /* Narrow screens: tighter bar, no minimap, smaller modal gutters. */
+  @media (max-width: 760px) {
+    #select { gap: 4px 8px; padding: 6px; }
+    #select button { padding: 8px 10px; }
+    .sel-sep { display: none; }
+    #hud { padding: 5px 8px; gap: 8px; }
+  }
+  @media (max-width: 520px) {
+    .sel-hint { display: none; }
+    #minimap { display: none; }
+    #hud { font-size: 11px; gap: 6px; }
+    .hud-controls button { min-width: 36px; min-height: 36px; font-size: 14px; }
+    #area-modal, #settings-modal, #help-modal { padding: 3vh 3vw; }
+  }
 </style>
 <script type="importmap">
 {
@@ -68,29 +116,49 @@
 </head>
 <body>
 <div id="select">
-  <span>Choose walker:</span>
-  <button class="walker-btn active" data-tint="0x4dc26b">🟢 Green</button>
-  <button class="walker-btn" data-tint="0x4d8ac2">🔵 Blue</button>
-  <button class="walker-btn" data-tint="0xc25d4d">🔴 Red</button>
-  <span style="margin:0 4px 0 8px;opacity:0.5;">|</span>
-  <button class="tod-btn" data-tod="day">☀️ Day</button>
-  <button class="tod-btn" data-tod="golden">🌅 Golden</button>
-  <button class="tod-btn" data-tod="night">🌙 Night</button>
-  <span>WASD / Arrows to move</span>
-  <button id="change-area">📍 Change area</button>
-  <button id="settings-open" aria-label="Settings">⚙️ Settings</button>
+  <div class="sel-group">
+    <span class="sel-label">Choose walker:</span>
+    <button class="walker-btn active" data-tint="0x4dc26b" aria-label="Green walker">🟢 Green</button>
+    <button class="walker-btn" data-tint="0x4d8ac2" aria-label="Blue walker">🔵 Blue</button>
+    <button class="walker-btn" data-tint="0xc25d4d" aria-label="Red walker">🔴 Red</button>
+  </div>
+  <span class="sel-sep">|</span>
+  <div class="sel-group">
+    <button class="tod-btn" data-tod="day" aria-label="Day time of day">☀️ Day</button>
+    <button class="tod-btn" data-tod="golden" aria-label="Golden time of day">🌅 Golden</button>
+    <button class="tod-btn" data-tod="night" aria-label="Night time of day">🌙 Night</button>
+  </div>
+  <span class="sel-sep">|</span>
+  <div class="sel-group">
+    <span class="sel-hint">WASD / Arrows to move</span>
+    <button id="change-area" aria-label="Change area">📍 Change area</button>
+    <button id="settings-open" aria-label="Settings">⚙️ Settings</button>
+  </div>
 </div>
-<div id="game"></div>
-<div id="zoom-ui">
-  <button id="zoom-in" aria-label="Zoom in">+</button>
-  <button id="zoom-out" aria-label="Zoom out">−</button>
+<div id="game">
+  <div id="minimap" aria-label="Minimap"></div>
+  <div id="zoom-ui">
+    <button id="zoom-in" aria-label="Zoom in">+</button>
+    <button id="zoom-out" aria-label="Zoom out">−</button>
+  </div>
+  <div id="touch-ui">
+    <span></span><button id="dpad-up" aria-label="Up">▲</button><span></span>
+    <button id="dpad-left" aria-label="Left">◀</button><span></span><button id="dpad-right" aria-label="Right">▶</button>
+    <span></span><button id="dpad-down" aria-label="Down">▼</button><span></span>
+  </div>
 </div>
-<div id="touch-ui">
-  <span></span><button id="dpad-up" aria-label="Up">▲</button><span></span>
-  <button id="dpad-left" aria-label="Left">◀</button><span></span><button id="dpad-right" aria-label="Right">▶</button>
-  <span></span><button id="dpad-down" aria-label="Down">▼</button><span></span>
+<div id="hud">
+  <div class="hud-info">
+    <span id="hud-area"></span>
+    <span id="hud-coords"></span>
+    <span class="hud-attr">© OpenStreetMap contributors ODbL · Buildings: Microsoft</span>
+  </div>
+  <div class="hud-controls">
+    <span id="help-open"><button id="btn-help" type="button" aria-label="Help">?</button></span>
+    <button id="btn-fullscreen" type="button" aria-label="Toggle fullscreen">⛶</button>
+    <button id="btn-reset-view" type="button" aria-label="Reset view to dropped pin">⌖</button>
+  </div>
 </div>
-<div id="hud">© OpenStreetMap contributors ODbL · Buildings: Microsoft</div>
 <div id="area-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(90,70,50,0.55);padding:4vh 4vw;box-sizing:border-box;">
   <div style="background:#FFEDCB;border:2px solid #C9A86A;border-radius:12px;max-width:640px;margin:0 auto;padding:12px;color:#5A4632;font-family:monospace;">
     <div style="display:flex;gap:6px;margin-bottom:8px;">
@@ -118,6 +186,22 @@
       <button id="settings-reset">Reset</button>
       <button id="settings-reload" style="display:none">Reload now</button>
       <button id="settings-close">Done</button>
+    </div>
+  </div>
+</div>
+<div id="help-modal" style="display:none;position:fixed;inset:0;z-index:120;background:rgba(90,70,50,0.55);padding:6vh 4vw;box-sizing:border-box;">
+  <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <h2 id="help-title">How to play</h2>
+    <ul class="help-list">
+      <li><b>WASD / Arrows</b> — walk around</li>
+      <li><b>Mouse wheel</b> — zoom in and out</li>
+      <li><b>+ / − buttons</b> — zoom from the top-right corner</li>
+      <li><b>On-screen D-pad</b> — walk on touch devices</li>
+      <li><b>Settings</b> — walking speed, default zoom, time of day, street life, area radius</li>
+      <li><b>Change area</b> — load any street in Istanbul</li>
+    </ul>
+    <div class="settings-footer">
+      <button id="help-close">Close</button>
     </div>
   </div>
 </div>
