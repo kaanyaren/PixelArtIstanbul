@@ -366,7 +366,8 @@ class MainScene extends Phaser.Scene {
 
     // Smooth turns for rendering (keep raw for joints/markings measured in cart metres).
     const roadLinesRaw = roadLines;
-    roadLines = roadLines.map((line) => (line.length > 2 ? chaikin(line, 2) : line));
+    roadLines = roadLines.map((line) => (line.length > 2 ? chaikin(line, 3) : line));
+
 
 
     // Ground base #E8DCC0 with subtle block variation.
@@ -536,7 +537,7 @@ class MainScene extends Phaser.Scene {
       }
     });
 
-    // 3b. Pavement joints every ~6m so sidewalks read as slabs, not a smear.
+    // 3b. Pavement joints every ~8m so sidewalks read as slabs, not a smear.
     roadLines.forEach((line, ri) => {
       const s = roadStyles[ri];
       if (s.baseW - s.surfW < 4) return;
@@ -553,13 +554,14 @@ class MainScene extends Phaser.Scene {
           const py = line[i][1] + (line[i + 1][1] - line[i][1]) * t;
           const a = toScreen(px - dy * half, py + dx * half);
           const b = toScreen(px + dy * half, py - dx * half);
-          g.lineStyle(1, 0xbfa88a, 0.7);
+          g.lineStyle(1, 0xbfa88a, 0.45);
           g.lineBetween(a.x, a.y, b.x, b.y);
-          acc += 6;
+          acc += 8;
         }
         acc -= segLen;
       }
     });
+
 
     // 3. Markings, step treads & manhole covers
     roadLines.forEach((line, ri) => {
