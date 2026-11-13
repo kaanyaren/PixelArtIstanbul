@@ -370,9 +370,10 @@ class MainScene extends Phaser.Scene {
     this.worldStats.buildings = buildings.length;
 
 
-    // Smooth turns for rendering (keep raw for joints/markings measured in cart metres).
-    const roadLinesRaw = roadLines;
+    // Smooth turns for rendering.
     roadLines = roadLines.map((line) => (line.length > 2 ? chaikin(line, 3) : line));
+
+
 
 
 
@@ -486,14 +487,8 @@ class MainScene extends Phaser.Scene {
       g.fillPoints(scr.map((p) => new Phaser.Geom.Point(p.x, p.y)), true);
       g.lineStyle(2, 0xA8CBDF, 0.9);
       g.strokePoints(scr.map((p) => new Phaser.Geom.Point(p.x, p.y)), true);
-      // Ripple dashes.
-      g.lineStyle(1, 0x8FB6D8, 0.8);
-      for (const [cx, cy] of cart) {
-        const p = toScreen(cx, cy);
-        g.lineBetween(p.x - 5, p.y, p.x + 1, p.y);
-        g.lineBetween(p.x + 3, p.y + 3, p.x + 9, p.y + 3);
-      }
     }
+
 
     // Streets: differentiated by road kind.
     // ROAD_PX/ROAD_M defined above (also used for building-road clearance).
@@ -548,81 +543,55 @@ class MainScene extends Phaser.Scene {
       const s = roadStyles[ri];
       const kind = roadMeta[ri]?.kind;
       const scr = roadScr[ri];
+      // Cumulative cart lengths for continuous placement along smoothed polyline.
+      const cum = [0];
+      for (let i = 0; i + 1 < line.length; i++) {
+        cum.push(cum[i] + Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]));
+      }
+      const total = cum[cum.length - 1] || 0;
+      const at = (d) => {
+        let seg = 0;
+        while (seg + 1 < cum.length - 1 && cum[seg + 1] < d) seg++;
+        const segLen = cum[seg + 1] - cum[seg] || 1;
+        const t = (d - cum[seg]) / segLen;
+        const a = scr[seg], b = scr[seg + 1];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const slen = Math.hypot(dx, dy) || 1;
+        return { x: a.x + dx * t, y: a.y + dy * t, nx: -dy / slen, ny: dx / slen };
+      };
 
-      if (s.type === 'steps') {
+      if (s.type === 'steps' && total > 0.5) {
         g.lineStyle(2, 0x5a4f42, 1);
-        for (let i = 0; i + 1 < line.length; i++) {
-          const segLen = Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]);
-          if (segLen < 0.5) continue;
-          const a = scr[i];
-          const b = scr[i + 1];
-          const sdx = b.x - a.x;
-          const sdy = b.y - a.y;
-          const slen = Math.hypot(sdx, sdy);
-          if (slen < 1) continue;
-          const nx = -sdy / slen;
-          const ny = sdx / slen;
-          for (let d = 0; d < segLen; d += 1.5) {
-            const t = d / segLen;
-            const px = a.x + sdx * t;
-            const py = a.y + sdy * t;
-            g.lineBetween(px - nx * 2, py - ny * 2, px + nx * 2, py + ny * 2);
-          }
+        for (let d = 1.5; d < total; d += 3) {
+          const p = at(d);
+          g.lineBetween(p.x - p.nx * 2, p.y - p.ny * 2, p.x + p.nx * 2, p.y + p.ny * 2);
         }
-      } else if (s.type === 'road') {
+      } else if (s.type === 'road' && total > 0.5) {
         g.lineStyle(2, s.dashCol, 1);
-        for (let i = 0; i + 1 < line.length; i++) {
-          const segLen = Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]);
-          if (segLen < 0.5) continue;
-          const a = scr[i];
-          const b = scr[i + 1];
-          const sdx = b.x - a.x;
-          const sdy = b.y - a.y;
-          const slen = Math.hypot(sdx, sdy);
-          if (slen < 1) continue;
-          const nx = -sdy / slen;
-          const ny = sdx / slen;
-          const dashLen = s.dual ? 1.2 : 1;
-          for (let d = 0; d < segLen; d += s.dashStep) {
-            const t0 = d / segLen;
-            const t1 = Math.min(1, (d + dashLen) / segLen);
-            const p0x = a.x + sdx * t0;
-            const p0y = a.y + sdy * t0;
-            const p1x = a.x + sdx * t1;
-            const p1y = a.y + sdy * t1;
-            if (s.dual) {
-              g.lineBetween(p0x + nx * 1.5, p0y + ny * 1.5, p1x + nx * 1.5, p1y + ny * 1.5);
-              g.lineBetween(p0x - nx * 1.5, p0y - ny * 1.5, p1x - nx * 1.5, p1y - ny * 1.5);
-            } else {
-              g.lineBetween(p0x, p0y, p1x, p1y);
-            }
+        const dashLen = s.dual ? 1.2 : 1;
+        for (let d = 0; d < total; d += s.dashStep) {
+          const p0 = at(d);
+          const p1 = at(Math.min(total, d + dashLen));
+          if (s.dual) {
+            g.lineBetween(p0.x + p0.nx * 1.5, p0.y + p0.ny * 1.5, p1.x + p1.nx * 1.5, p1.y + p1.ny * 1.5);
+            g.lineBetween(p0.x - p0.nx * 1.5, p0.y - p0.ny * 1.5, p1.x - p1.nx * 1.5, p1.y - p1.ny * 1.5);
+          } else {
+            g.lineBetween(p0.x, p0.y, p1.x, p1.y);
           }
         }
       }
 
-      if (drivable.has(kind)) {
-        let cartLen = 0;
-        const cum = [0];
-        for (let i = 0; i + 1 < line.length; i++) {
-          cartLen += Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]);
-          cum.push(cartLen);
-        }
-        for (let s = 27.5; s < cartLen; s += 55) {
-          let seg = 0;
-          while (seg + 1 < cum.length - 1 && cum[seg + 1] < s) seg++;
-          const sLen = cum[seg + 1] - cum[seg] || 1;
-          const t = (s - cum[seg]) / sLen;
-          const a = scr[seg];
-          const b = scr[seg + 1];
-          const px = a.x + (b.x - a.x) * t;
-          const py = a.y + (b.y - a.y) * t;
+      if (drivable.has(kind) && total > 0.5) {
+        for (let d = 27.5; d < total; d += 55) {
+          const p = at(d);
           g.fillStyle(0x3d3a36, 1);
-          g.fillCircle(px, py, 1.8);
+          g.fillCircle(p.x, p.y, 1.8);
           g.fillStyle(0x6e6862, 1);
-          g.fillCircle(px, py, 0.8);
+          g.fillCircle(p.x, p.y, 0.8);
         }
       }
     });
+
 
     // Street furniture + labels (read road.name / road.kind where road is object).
     {
