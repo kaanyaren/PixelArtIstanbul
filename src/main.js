@@ -1,6 +1,6 @@
 import * as Phaser from 'phaser';
 import { cartToIso } from './iso.js';
-import { PAL, mulberry32, hashStr, drawBuilding, drawTree } from './look.js';
+import { PAL, STYLES, styleFor, mulberry32, hashStr, drawBuilding, drawTree } from './look.js';
 import { spawnCats, spawnCars, spawnPeople, spawnGulls, updateNPCs } from './npcs.js';
 import { areaFromURL, gotoArea, fetchArea } from './area.js';
 import { SETTINGS, loadSettings, saveSettings, resetSettings } from './settings.js';
@@ -568,9 +568,11 @@ class MainScene extends Phaser.Scene {
       g.fillStyle(0xefe3cb, 1);
       g.fillPoints(base.map((p) => new Phaser.Geom.Point(p.x, p.y + 2)), true);
       const seed = hashStr(String(b.id ?? `${bb.minX},${bb.minY}`));
-      const facade = b.color ?? PAL.facades[seed % PAL.facades.length];
+      const style = b.style ?? styleFor(b);
+      const pal = STYLES[style] || STYLES.apartment;
+      const facade = b.color ?? pal.facades[seed % pal.facades.length];
       const floors = Math.max(1, Math.round(b.height / 3));
-      drawBuilding(g, base, { heightPx: b.height * PX_M, seed, floors, facade });
+      drawBuilding(g, base, { heightPx: b.height * PX_M, seed, floors, facade, style });
       this.bboxes.push(bb);
       if (b.landmark) {
         const lcx = base.reduce((s, p) => s + p.x, 0) / base.length;
