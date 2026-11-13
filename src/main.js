@@ -417,18 +417,6 @@ class MainScene extends Phaser.Scene {
       true,
     );
 
-    // Paving joints: 20m grid, the way a stone plaza reads in an iso game.
-    g.lineStyle(1, 0xd3bf98, 0.28);
-    for (let x = minX; x <= maxX; x += 20) {
-      const a = toScreen(x, minY);
-      const b = toScreen(x, maxY);
-      g.lineBetween(a.x, a.y, b.x, b.y);
-    }
-    for (let y = minY; y <= maxY; y += 20) {
-      const a = toScreen(minX, y);
-      const b = toScreen(maxX, y);
-      g.lineBetween(a.x, a.y, b.x, b.y);
-    }
     // Worn earth patches + weeds so the empty ground is not a blank sheet.
     const grand = mulberry32(31);
     for (let i = 0; i < 70; i++) {
@@ -443,6 +431,7 @@ class MainScene extends Phaser.Scene {
         g.fillRect(p.x, p.y, 2, 3);
       }
     }
+
 
     // Parks, gardens, grass and water from OSM landuse/natural.
     const GREEN_COL = {
