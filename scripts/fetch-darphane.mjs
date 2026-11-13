@@ -240,7 +240,7 @@ function parseOsmXml(xml) {
   }
   return {
     meta: { center: CENTER, bbox: BBOX, source: "OpenStreetMap ODbL", sources: ["OpenStreetMap ODbL"] },
-    buildings: buildings.slice(0, 500),
+    buildings: buildings.slice(0, 3000),
     roads,
     greens: keptG,
     waters: keptW,

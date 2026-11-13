@@ -213,16 +213,32 @@ class MainScene extends Phaser.Scene {
       .catch((err) => {
         if (loading) loading.style.display = 'none';
         const toast = document.getElementById('area-err');
+        const msg = String((err && err.message) || err || 'Area load failed');
+        const nearDarphane =
+          Math.abs(a.lat - DEFAULT_CENTER.lat) < 0.01 && Math.abs(a.lon - DEFAULT_CENTER.lon) < 0.01;
         if (toast) {
-          toast.textContent = String((err && err.message) || err || 'Area load failed');
+          toast.textContent = nearDarphane ? msg : `${msg} — offline fallback`;
           toast.style.display = 'block';
           setTimeout(() => { toast.style.display = 'none'; }, 4000);
         }
-        // Try bundled Darphane data as offline fallback, else tiny fallback.
-        fetch('data/darphane.json', { cache: 'no-store' })
-          .then((r) => (r.ok ? r.json() : FALLBACK))
-          .catch(() => FALLBACK)
-          .then((data) => this.buildWorld(data));
+        if (nearDarphane) {
+          // Live fetch failed for bundled/default area: use bundled Darphane data.
+          fetch('data/darphane.json', { cache: 'no-store' })
+            .then((r) => (r.ok ? r.json() : FALLBACK))
+            .catch(() => FALLBACK)
+            .then((data) => this.buildWorld(data));
+          return;
+        }
+        // Wrong area for bundled data: keep local fallback but anchor to requested pin.
+        const fb = {
+          ...FALLBACK,
+          meta: {
+            ...(FALLBACK.meta || {}),
+            center: { lat: a.lat, lon: a.lon },
+            name: 'Offline fallback',
+          },
+        };
+        this.buildWorld(fb);
       });
 
   }
@@ -347,22 +363,18 @@ class MainScene extends Phaser.Scene {
       return w[0] / 2;
     });
 
-    // Drop buildings sitting on roads: any footprint vertex or centroid within the
-    // road corridor (half width + 0.8m margin) means overlap.
-    const beforeB = buildings.length;
+    // Drop buildings whose centroid sits inside the carriageway.
+    // (Vertex check was too aggressive and hid valid roadside buildings.)
     buildings = buildings.filter(({ cart, b }) => {
-      if (b.landmark) return true; // never drop the anchor landmark
+      if (b.landmark) return true;
       const cx = cart.reduce((s, p) => s + p[0], 0) / cart.length;
       const cy = cart.reduce((s, p) => s + p[1], 0) / cart.length;
-      const pts = [[cx, cy], ...cart];
       for (let ri = 0; ri < roadLines.length; ri++) {
         const line = roadLines[ri];
-        const thr = roadHalfM[ri] + 0.8;
+        const thr = Math.max(1.5, roadHalfM[ri] * 0.55);
         for (let i = 0; i + 1 < line.length; i++) {
           const [ax, ay] = line[i], [bx, by] = line[i + 1];
-          for (const [px, py] of pts) {
-            if (distPtSeg(px, py, ax, ay, bx, by) < thr) return false;
-          }
+          if (distPtSeg(cx, cy, ax, ay, bx, by) < thr) return false;
         }
       }
       return true;
@@ -985,6 +997,7 @@ class MainScene extends Phaser.Scene {
     spawnGulls(this, Math.round(5 * this.cfg.life));
     this.buildSettingsUI();
     this.wireHud();
+    console.info('[pai]', { center: window.__areaCenter, stats: this.worldStats });
   }
 
   // Mini map: static city plan drawn once, player dot refreshed each frame.
@@ -1334,5 +1347,12 @@ const config = {
   scene: [MainScene],
 };
 
-window.__game = new Phaser.Game(config);
+window.__phaserConfig = config;
+window.__game = null;
+try {
+  window.__game = new Phaser.Game(config);
+} catch (e) {
+  window.__err = String((e && e.message) || e);
+  console.error('[pai] game init failed', e);
+}
 window.addEventListener('error', (e) => { window.__err = String((e && e.message) || e); });

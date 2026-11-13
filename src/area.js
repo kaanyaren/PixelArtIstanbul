@@ -228,13 +228,102 @@ function parseOsmXml(text) {
         }
       }
     }
-    // Multipart green/water relations: concatenate member way geometry.
-    // ponytail: member order assumed as listed; fine for simple rings.
-    const g = greenKind(tags);
-    const w = waterKind(tags);
-    if (!g && !w) continue;
-    const pts = [];
+    // Multipart green/water/building relations: collect member way geometry.
+    const gk = greenKind(tags);
+    const wk = waterKind(tags);
+    const isBuilding = tags.building != null;
+    if (!gk && !wk && !isBuilding) continue;
     const memEls = rel.getElementsByTagName("member");
+    if (isBuilding) {
+      // Multipolygon/outline building: collect outer way member rings.
+      const rings = [];
+      const segs = [];
+      const relNodeMap = new Map();
+      const relNdEls = rel.getElementsByTagName("nd");
+      for (let j = 0; j < relNdEls.length; j++) {
+        const id = relNdEls[j].getAttribute("ref");
+        const nLat = parseFloat(relNdEls[j].getAttribute("lat"));
+        const nLon = parseFloat(relNdEls[j].getAttribute("lon"));
+        if (id != null && Number.isFinite(nLat) && Number.isFinite(nLon)) relNodeMap.set(String(id), [nLon, nLat]);
+      }
+      const ptKey = (p) => `${p[0].toFixed(7)},${p[1].toFixed(7)}`;
+      for (let j = 0; j < memEls.length; j++) {
+        const mem = memEls[j];
+        if (mem.getAttribute("type") !== "way") continue;
+        const role = mem.getAttribute("role") || "";
+        if (role && role !== "outer" && role !== "outline") continue;
+        let mpts = null;
+        let refs = null;
+        const ndEls = mem.getElementsByTagName("nd");
+        if (ndEls.length) {
+          mpts = [];
+          refs = [];
+          for (let k = 0; k < ndEls.length; k++) {
+            const nd = ndEls[k];
+            const ref = nd.getAttribute("ref");
+            if (ref != null) refs.push(String(ref));
+            const nLat = parseFloat(nd.getAttribute("lat"));
+            const nLon = parseFloat(nd.getAttribute("lon"));
+            if (Number.isFinite(nLat) && Number.isFinite(nLon)) mpts.push([nLon, nLat]);
+            else if (ref != null) {
+              const hit = nodeMap.get(String(ref)) ?? relNodeMap.get(String(ref));
+              if (hit) mpts.push(hit);
+            }
+          }
+        } else {
+          const ref = String(mem.getAttribute("ref"));
+          const wpts = wayMap.get(ref);
+          if (wpts) {
+            mpts = wpts.slice();
+            refs = [];
+          }
+        }
+        if (!mpts || mpts.length < 3) continue;
+        const closed = (refs && refs.length > 1 && refs[0] === refs[refs.length - 1]) || ptKey(mpts[0]) === ptKey(mpts[mpts.length - 1]);
+        if (closed) rings.push(mpts);
+        else segs.push(mpts);
+      }
+      if (segs.length) {
+        const chains = segs.map((s) => s.slice());
+        let changed = true;
+        while (changed && chains.length > 1) {
+          changed = false;
+          outer: for (let a = 0; a < chains.length; a++) {
+            for (let b = a + 1; b < chains.length; b++) {
+              const A = chains[a];
+              const B = chains[b];
+              const a0 = ptKey(A[0]);
+              const a1 = ptKey(A[A.length - 1]);
+              const b0 = ptKey(B[0]);
+              const b1 = ptKey(B[B.length - 1]);
+              let merged = null;
+              if (a1 === b0) merged = A.concat(B.slice(1));
+              else if (a1 === b1) merged = A.concat(B.slice(0, -1).reverse());
+              else if (a0 === b1) merged = B.concat(A.slice(1));
+              else if (a0 === b0) merged = B.slice().reverse().concat(A.slice(1));
+              if (merged) {
+                chains[a] = merged;
+                chains.splice(b, 1);
+                changed = true;
+                break outer;
+              }
+            }
+          }
+        }
+        for (const c of chains) {
+          if (c.length >= 3) {
+            if (ptKey(c[0]) === ptKey(c[c.length - 1]) || c.length >= 4) rings.push(c);
+          }
+        }
+      }
+      if (rings.length) {
+        rings.sort((a, b) => footprintAreaM2(b) - footprintAreaM2(a));
+        const outer = rings[0];
+        bRaw.push({ id: "r" + rel.getAttribute("id"), pts: outer, tags, area: footprintAreaM2(outer) });
+      }
+      continue;
+    }
+    const pts = [];
     for (let j = 0; j < memEls.length; j++) {
       const mem = memEls[j];
       if (mem.getAttribute("type") !== "way") continue;
@@ -250,7 +339,7 @@ function parseOsmXml(text) {
         if (wpts) for (const p of wpts) pts.push(p);
       }
     }
-    if (pts.length >= 3) (g ? greens : waters).push({ pts, kind: g ?? w });
+    if (pts.length >= 3) (gk ? greens : waters).push({ pts, kind: gk ?? wk });
   }
   for (const r of roads) {
     if (!r.name && relNames.has(r.id.slice(1))) r.name = relNames.get(r.id.slice(1));
@@ -279,7 +368,7 @@ function parseOsmXml(text) {
   }
   for (const r of roads) delete r.refs;
   bRaw.sort((a, b) => b.area - a.area);
-  const buildings = bRaw.slice(0, 500).map((b) => {
+  const buildings = bRaw.slice(0, 3000).map((b) => {
     let levels = parseNum(b.tags["building:levels"]);
     let height = parseNum(b.tags.height ?? b.tags["building:height"]);
     if (height == null) height = levels != null ? levels * 3 : 9;
@@ -372,11 +461,36 @@ async function fetchMsCells(w, s, e, n, existing) {
 export async function fetchArea(lat, lon, r = 500) {
   const la = Number(lat);
   const lo = Number(lon);
-  const radii = [Number(r) || 500, Math.max(250, (Number(r) || 500) * 0.6)];
+  const base = Number(r) || 500;
 
   if (typeof fetch === "undefined") throw new Error("Could not load map data (network busy). Try again.");
 
-  for (const rad of radii) {
+  const overpassUrls = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  ];
+
+  async function fetchOverpass(url, ql, timeoutMs = 30000) {
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const t = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const res = await fetch(url, { method: "POST", body: ql, ...(ctrl ? { signal: ctrl.signal } : {}) });
+      if (!res.ok) throw new Error("overpass failed: " + res.status);
+      return parseOsmXml(await res.text());
+    } finally {
+      if (t) clearTimeout(t);
+    }
+  }
+
+  async function fetchOsmMap(box) {
+    const url = `https://api.openstreetmap.org/api/0.6/map?bbox=${box}`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error("osm api failed: " + res.status);
+    return parseOsmXml(await res.text());
+  }
+
+  async function tryFetch(rad) {
     // Fetch with 150m margin so edge buildings keep full geometry; clip to rad after.
     const frad = rad + 150;
     const dLat = frad / 111320;
@@ -385,61 +499,76 @@ export async function fetchArea(lat, lon, r = 500) {
     const s = la - dLat;
     const e = lo + dLon;
     const n = la + dLat;
-
-    const attempts = [
-      async () => {
-        const url = `https://api.openstreetmap.org/api/0.6/map?bbox=${w},${s},${e},${n}`;
-        const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) throw new Error("osm api failed: " + res.status);
-        return parseOsmXml(await res.text());
-      },
-      async () => {
-        const ql = `[out:xml][timeout:30];(way["building"](${s},${w},${n},${e});way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|pedestrian|track|busway|footway|path|steps|cycleway|bridleway)(_link)?$"](${s},${w},${n},${e});way["landuse"~"^(grass|forest|meadow|allotments|village_green|recreation_ground|cemetery|reservoir|basin)$"](${s},${w},${n},${e});way["leisure"~"^(park|garden|pitch|playground|cemetery)$"](${s},${w},${n},${e});way["natural"="water"](${s},${w},${n},${e});way["waterway"~"^(riverbank|river|canal)$"](${s},${w},${n},${e});rel["landuse"~"^(grass|forest|meadow|allotments|village_green|recreation_ground|cemetery|reservoir|basin)$"](${s},${w},${n},${e});rel["leisure"~"^(park|garden|pitch|playground|cemetery)$"](${s},${w},${n},${e});rel["natural"="water"](${s},${w},${n},${e});node["amenity"](${s},${w},${n},${e});node["tourism"](${s},${w},${n},${e});node["historic"](${s},${w},${n},${e});node["natural"="tree"](${s},${w},${n},${e});node["shop"](${s},${w},${n},${e});node["highway"~"^(bus_stop|street_lamp)$"](${s},${w},${n},${e});node["waterway"~"^(drinking_water|fountain)$"](${s},${w},${n},${e});node["man_made"~"^(water_tower|lighthouse)$"](${s},${w},${n},${e});node["railway"="station"](${s},${w},${n},${e}););out geom;`;
-        const res = await fetch("https://overpass-api.de/api/interpreter", {
-          method: "POST",
-          body: ql,
-        });
-        if (!res.ok) throw new Error("overpass failed: " + res.status);
-        return parseOsmXml(await res.text());
-      },
-    ];
-
-    for (const attempt of attempts) {
+    const box = `${s},${w},${n},${e}`;
+    const ql = `[out:xml][timeout:30];(way["building"](${box});relation["building"]["type"="multipolygon"](${box});relation["building"](${box});way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|pedestrian|track|busway|footway|path|steps|cycleway|bridleway)(_link)?$"](${box});way["landuse"~"^(grass|forest|meadow|allotments|village_green|recreation_ground|cemetery|reservoir|basin)$"](${box});way["leisure"~"^(park|garden|pitch|playground|cemetery)$"](${box});way["natural"="water"](${box});way["waterway"~"^(riverbank|river|canal)$"](${box});relation["landuse"~"^(grass|forest|meadow|allotments|village_green|recreation_ground|cemetery|reservoir|basin)$"](${box});relation["leisure"~"^(park|garden|pitch|playground|cemetery)$"](${box});relation["natural"="water"](${box});node["amenity"](${box});node["tourism"](${box});node["historic"](${box});node["natural"="tree"](${box});node["shop"](${box});node["highway"~"^(bus_stop|street_lamp)$"](${box});node["waterway"~"^(drinking_water|fountain)$"](${box});node["man_made"~"^(water_tower|lighthouse)$"](${box});node["railway"="station"](${box}););out body;>;out skel qt;`;
+    for (const url of overpassUrls) {
       try {
-        const { buildings, roads, greens, waters, pois } = await attempt();
-        const kx = 111320 * Math.cos((la * Math.PI) / 180);
-        const inR = (lon, lat) => Math.abs((lon - lo) * kx) <= rad && Math.abs((lat - la) * 111320) <= rad;
-        const keptB = buildings.filter((b) => {
-          let sx = 0;
-          let sy = 0;
-          for (const [x, y] of b.pts) {
-            sx += x;
-            sy += y;
-          }
-          return inR(sx / b.pts.length, sy / b.pts.length);
-        });
-        const keptR = roads.filter((r) => r.pts.some(([x, y]) => inR(x, y)));
-        const keptG = greens.filter((g) => g.pts.some(([x, y]) => inR(x, y)));
-        const keptW = waters.filter((w) => w.pts.some(([x, y]) => inR(x, y)));
-        const keptP = pois.filter((p) => inR(p.x, p.y));
-        let ms = [];
-        try {
-          ms = await fetchMsCells(w, s, e, n, keptB);
-        } catch {
-          ms = [];
-        }
-        return {
-          meta: { center: { lat: la, lon: lo }, source: "OpenStreetMap ODbL" },
-          buildings: [...keptB, ...ms],
-          roads: keptR,
-          greens: keptG,
-          waters: keptW,
-          pois: keptP,
-        };
+        return { ...(await fetchOverpass(url, ql)), bbox: { w, s, e, n }, rad };
       } catch {
-        // try next source, then smaller radius
+        // try next mirror
       }
     }
+    try {
+      return { ...(await fetchOsmMap(`${w},${s},${e},${n}`)), bbox: { w, s, e, n }, rad };
+    } catch {
+      return null;
+    }
   }
-  throw new Error("Could not load map data (network busy). Try again.");
+
+  let result = await tryFetch(base);
+  if (result) {
+    const roads0 = result.roads.filter((r) => r.pts.some(([x, y]) => {
+      const kx = 111320 * Math.cos((la * Math.PI) / 180);
+      return Math.abs((x - lo) * kx) <= base && Math.abs((y - la) * 111320) <= base;
+    }));
+    const b0 = result.buildings.filter((b) => {
+      const kx = 111320 * Math.cos((la * Math.PI) / 180);
+      let sx = 0;
+      let sy = 0;
+      for (const [x, y] of b.pts) { sx += x; sy += y; }
+      return Math.abs((sx / b.pts.length - lo) * kx) <= base && Math.abs((sy / b.pts.length - la) * 111320) <= base;
+    });
+    if (b0.length === 0 && roads0.length > 0) {
+      const retry = await tryFetch(base + 200);
+      if (retry) result = retry;
+    }
+  }
+
+  if (!result) {
+    // fallback to smaller radius attempts if primary fetch path failed entirely
+    const retrySmall = await tryFetch(Math.max(250, base * 0.6));
+    if (!retrySmall) throw new Error("Could not load map data (network busy). Try again.");
+    result = retrySmall;
+  }
+
+  const { buildings, roads, greens, waters, pois, bbox, rad } = result;
+  const kx = 111320 * Math.cos((la * Math.PI) / 180);
+  const inR = (lonv, latv) => Math.abs((lonv - lo) * kx) <= rad && Math.abs((latv - la) * 111320) <= rad;
+  const keptB = buildings.filter((b) => {
+    let sx = 0;
+    let sy = 0;
+    for (const [x, y] of b.pts) {
+      sx += x;
+      sy += y;
+    }
+    return inR(sx / b.pts.length, sy / b.pts.length);
+  });
+  const keptR = roads.filter((r) => r.pts.some(([x, y]) => inR(x, y)));
+  const keptG = greens.filter((g) => g.pts.some(([x, y]) => inR(x, y)));
+  const keptW = waters.filter((w) => w.pts.some(([x, y]) => inR(x, y)));
+  const keptP = pois.filter((p) => inR(p.x, p.y));
+  let ms = [];
+  try {
+    ms = await fetchMsCells(bbox.w, bbox.s, bbox.e, bbox.n, keptB);
+  } catch {
+    ms = [];
+  }
+  return {
+    meta: { center: { lat: la, lon: lo }, source: "OpenStreetMap ODbL" },
+    buildings: [...keptB, ...ms],
+    roads: keptR,
+    greens: keptG,
+    waters: keptW,
+    pois: keptP,
+  };
 }
