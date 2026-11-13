@@ -9,9 +9,9 @@ import { SETTINGS, loadSettings, saveSettings, resetSettings } from './settings.
 const PX_M = 8; // vertical pixels per meter of height
 const OX = 400;
 const OY = 140;
-const DEFAULT_CENTER = { lat: 40.9968, lon: 28.8525, name: 'Barbaros 1. Sokak' };
+const DEFAULT_CENTER = { lat: 41.057, lon: 29.0082, name: 'Barbaros 1. Sokağı' };
 const FALLBACK = {
-  meta: { name: 'Barbaros 1. Sokak fallback', center: { lat: 40.9968, lon: 28.8525 } },
+  meta: { name: 'Barbaros 1. Sokağı fallback', center: { lat: 41.057, lon: 29.0082 } },
   buildings: [
     { id: 'b1', pts: [[0, 0], [10, 0], [10, 8], [0, 8]], height: 9 },
     { id: 'b2', pts: [[16, 4], [24, 4], [24, 12], [16, 12]], height: 6 },
@@ -21,6 +21,7 @@ const FALLBACK = {
   waters: [],
   pois: [],
 };
+
 
 
 let playerTint = 0x4dc26b;
@@ -541,32 +542,6 @@ class MainScene extends Phaser.Scene {
         g.lineBetween(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
       }
     });
-
-    // 3b. Pavement joints every ~8m so sidewalks read as slabs, not a smear.
-    roadLines.forEach((line, ri) => {
-      const s = roadStyles[ri];
-      if (s.baseW - s.surfW < 4) return;
-      const half = (s.baseW + s.surfW) / 4;
-      let acc = 0;
-      for (let i = 0; i + 1 < line.length; i++) {
-        const segLen = Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]);
-        if (segLen < 0.5) continue;
-        const dx = (line[i + 1][0] - line[i][0]) / segLen;
-        const dy = (line[i + 1][1] - line[i][1]) / segLen;
-        while (acc < segLen) {
-          const t = acc / segLen;
-          const px = line[i][0] + (line[i + 1][0] - line[i][0]) * t;
-          const py = line[i][1] + (line[i + 1][1] - line[i][1]) * t;
-          const a = toScreen(px - dy * half, py + dx * half);
-          const b = toScreen(px + dy * half, py - dx * half);
-          g.lineStyle(1, 0xbfa88a, 0.45);
-          g.lineBetween(a.x, a.y, b.x, b.y);
-          acc += 8;
-        }
-        acc -= segLen;
-      }
-    });
-
 
     // 3. Markings, step treads & manhole covers
     roadLines.forEach((line, ri) => {
