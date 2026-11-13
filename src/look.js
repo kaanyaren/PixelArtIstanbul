@@ -131,31 +131,40 @@ function windowGrid(g, A, B, At, Bt, rng, floors, o) {
         g.fillStyle(o.shutter, 1);
         g.fillRect(p.x - 8, p.y - 5, 4, 10);
         g.fillRect(p.x + 4, p.y - 5, 4, 10);
+        g.lineStyle(1, shade(o.shutter, 0.7), 1);
+        g.lineBetween(p.x - 6, p.y - 1, p.x - 4, p.y - 1);
+        g.lineBetween(p.x + 4, p.y - 1, p.x + 6, p.y - 1);
       }
       g.fillStyle(PAL.trim, 1);
       g.fillRect(p.x - 5, p.y - 6, 10, 12);
-      g.fillStyle(PAL.glass, 1);
+      const lit = rng() < 0.18;
+      g.fillStyle(lit ? 0xEFD27A : PAL.glass, 1);
       g.fillRect(p.x - 3.5, p.y - 4.5, 7, 9);
       if (o.arched) {
-        g.fillStyle(PAL.glass, 1);
+        g.fillStyle(lit ? 0xEFD27A : PAL.glass, 1);
         g.fillRect(p.x - 2, p.y - 6, 4, 2);
         g.fillStyle(PAL.trim, 1);
         g.fillRect(p.x - 5, p.y - 6, 2, 1);
         g.fillRect(p.x + 3, p.y - 6, 2, 1);
       }
+      // Muntins and frame depth.
+      g.lineStyle(1, shade(PAL.trim, 0.85), 1);
+      g.lineBetween(p.x, p.y - 4.5, p.x, p.y + 4.5);
+      g.lineBetween(p.x - 3.5, p.y, p.x + 3.5, p.y);
       g.fillStyle(PAL.trim, 1);
       g.fillRect(p.x - 6, p.y + 6, 12, 2);
-      if (rng() < 0.45) {
-        g.fillStyle(0xF5EDD6, 1);
+      if (rng() < 0.5) {
+        g.fillStyle(lit ? 0xFFF2A8 : 0xF5EDD6, 1);
         g.fillRect(p.x - 3.5, p.y - 4.5, 2, 9);
       }
-      g.lineStyle(1, 0xBFD9E5, 0.9);
+      g.lineStyle(1, 0xBFD9E5, lit ? 0.4 : 0.9);
       g.lineBetween(p.x - 3, p.y + 2, p.x + 1, p.y - 3);
-      if (rng() < 0.22) {
+      if (rng() < 0.24) {
         g.fillStyle(0xC96F4A, 1);
         g.fillRect(p.x - 5, p.y + 6, 10, 3);
         g.fillStyle(0x5A7A5A, 1);
         g.fillRect(p.x - 4, p.y + 4, 8, 3);
+        if (rng() < 0.4) { g.fillStyle(0xD43B3B, 1); g.fillRect(p.x - 1, p.y + 3, 2, 2); }
       }
     }
   }
@@ -203,7 +212,11 @@ function hipRoof(g, eave, cx, cy, rh, faceCol, rng, opts = {}) {
 function flatRoof(g, tAll, tcx, tcy, rng, st) {
   g.fillStyle(0x8A8D90, 1);
   g.fillPoints(tAll, true);
-  g.lineStyle(2, PAL.trim, 0.9);
+  // Parapet wall ring.
+  const para = shrinkRing(tAll, tcx, tcy, principalAxis(tAll), 0.97, 0.97);
+  g.lineStyle(3, 0xB8B0A0, 1);
+  g.strokePoints(para, true);
+  g.lineStyle(1, 0xD8D0C0, 0.9);
   g.strokePoints(tAll, true);
   // Rooftop water tank on legs.
   const wx = tcx + (rng() - 0.5) * 14, wy = tcy - 8;
@@ -220,6 +233,14 @@ function flatRoof(g, tAll, tcx, tcy, rng, st) {
   g.lineBetween(dx, tcy - 2, dx, tcy - 7);
   g.fillStyle(0xB8B0A0, 1);
   g.fillRect(dx - 3, tcy - 10, 6, 4);
+  // Vent / AC block.
+  if (rng() < 0.6) {
+    const vx = tcx - 8 + rng() * 6;
+    g.fillStyle(0x7A7E82, 1);
+    g.fillRect(vx, tcy - 6, 8, 5);
+    g.fillStyle(0x65696D, 1);
+    g.fillRect(vx + 1, tcy - 5, 6, 3);
+  }
 }
 
 function domeRoof(g, tAll, tcx, tcy, rng, st) {
@@ -319,7 +340,7 @@ export function drawBuilding(g, base, opts = {}) {
   g.lineBetween(pF.x, pF.y - 1, pA.x, pA.y - 1);
   g.lineBetween(pF.x, pF.y - 1, pB.x, pB.y - 1);
 
-  // Floor separation lines.
+  // Floor separation lines + cornice band.
   g.lineStyle(1, PAL.trim, 0.7);
   for (let i = 1; i <= floors; i++) {
     const v = i / (floors + 0.6);
@@ -328,6 +349,11 @@ export function drawBuilding(g, base, opts = {}) {
     g.lineBetween(a1.x, a1.y, b1.x, b1.y);
     g.lineBetween(a2.x, a2.y, b2.x, b2.y);
   }
+  // Cornice under eave.
+  g.lineStyle(2, shade(fc, 1.08), 0.9);
+  g.lineBetween(tF.x, tF.y + 2, tA.x, tA.y + 2);
+  g.lineBetween(tF.x, tF.y + 2, tB.x, tB.y + 2);
+
 
   const shutterCol = PAL.shutter[(rng() * PAL.shutter.length) | 0];
   windowGrid(g, pF, pA, tF, tA, rng, floors, { shutter: shutterCol, arched: st.arched });
@@ -378,14 +404,22 @@ export function drawBuilding(g, base, opts = {}) {
     }
   }
 
-  // Chimney.
+  // Chimney / antenna.
   if (rng() < 0.65) {
     const chx = tcx + (rng() - 0.5) * 20;
     g.fillStyle(0xC96F4A, 1);
     g.fillRect(chx - 3, tcy - rh - 14, 7, 14);
     g.fillStyle(PAL.trim, 1);
     g.fillRect(chx - 4, tcy - rh - 16, 9, 3);
+  } else {
+    // Slim TV antenna.
+    const ax = tcx + (rng() - 0.5) * 18;
+    g.lineStyle(1, 0x5A5A5A, 1);
+    g.lineBetween(ax, tcy - rh - 2, ax, tcy - rh - 16);
+    g.lineBetween(ax - 4, tcy - rh - 12, ax, tcy - rh - 16);
+    g.lineBetween(ax + 4, tcy - rh - 12, ax, tcy - rh - 16);
   }
+
 
   const longA = Math.hypot(pB.x - pF.x, pB.y - pF.y) >= Math.hypot(pA.x - pF.x, pA.y - pF.y);
   const Q = longA ? pB : pA, tQ = longA ? tB : tA;
@@ -441,37 +475,51 @@ export function drawBuilding(g, base, opts = {}) {
     }
   }
 
-  const isShop = rng() < 0.35;
+  const isShop = rng() < 0.38;
   const d = wallPoint(pF, Q, tF, tQ, 0.5, 0.0);
   if (isShop) {
-    const band = [0xC0392B, 0x2A9D8F, 0xE67E22, 0x2E5FA3][(rng() * 4) | 0];
-    let l = wallPoint(pF, Q, tF, tQ, 0.08, 0.1), r = wallPoint(pF, Q, tF, tQ, 0.92, 0.1);
+    const band = [0xC0392B, 0x2A9D8F, 0xE67E22, 0x2E5FA3, 0x7A5230][(rng() * 5) | 0];
+    let l = wallPoint(pF, Q, tF, tQ, 0.06, 0.12), r = wallPoint(pF, Q, tF, tQ, 0.94, 0.12);
     if (Math.abs(r.x - l.x) > 120) {
       const cc = (l.x + r.x) / 2;
       l = { x: cc - 60, y: l.y };
       r = { x: cc + 60, y: r.y };
     }
+    const lx = Math.min(l.x, r.x), ly = Math.min(l.y, r.y), lw = Math.abs(r.x - l.x);
+    // Sign band + awning stripes.
     g.fillStyle(band, 1);
-    g.fillRect(Math.min(l.x, r.x), Math.min(l.y, r.y) - 3, Math.abs(r.x - l.x), 6);
+    g.fillRect(lx, ly - 4, lw, 7);
+    for (let i = 0; i < 6; i++) {
+      g.fillStyle(i % 2 ? 0xF7F2E7 : shade(band, 0.85), 1);
+      g.fillRect(lx + (lw * i) / 6, ly + 3, lw / 6 + 0.5, 4);
+    }
     g.fillStyle(0xF7F2E7, 1);
-    g.fillRect(Math.min(l.x, r.x) + 2, Math.min(l.y, r.y) - 2, Math.min(20, Math.abs(r.x - l.x) / 3), 4);
+    g.fillRect(lx + 3, ly - 3, Math.min(22, lw / 3), 4);
+    // Shop window + door.
+    g.fillStyle(0xCFE4EE, 1);
+    g.fillRect(d.x - 14, d.y - 14, 10, 10);
     g.fillStyle(0x2E3A44, 1);
-    g.fillRect(d.x - 4, d.y - 12, 8, 12);
+    g.fillRect(d.x - 2, d.y - 13, 9, 13);
+    g.fillStyle(0x4A3226, 1);
+    g.fillRect(d.x, d.y - 12, 5, 12);
     g.lineStyle(1, 0xB8B0A0, 1);
-    g.lineBetween(d.x - 5, d.y, d.x + 5, d.y);
+    g.lineBetween(d.x - 15, d.y, d.x + 8, d.y);
   } else {
     g.fillStyle(0x4A3226, 1);
     g.fillRect(d.x - 4, d.y - 13, 8, 13);
     g.fillStyle(0x6B4A30, 1);
     g.fillRect(d.x - 4, d.y - 13, 2, 13);
+    g.fillStyle(0xD4AF37, 1);
+    g.fillRect(d.x + 2, d.y - 7, 1, 1);
     g.lineStyle(1, 0xB8B0A0, 1);
     g.lineBetween(d.x - 6, d.y, d.x + 6, d.y);
     g.lineBetween(d.x - 6, d.y + 2, d.x + 6, d.y + 2);
-    if (rng() < 0.5) {
+    if (rng() < 0.55) {
       g.fillStyle(shade(fc, 0.7), 1);
       g.fillRect(d.x - 7, d.y - 16, 14, 3);
     }
   }
+
 
   const potSides = rng() < 0.5 ? [-1, 1] : [rng() < 0.5 ? -1 : 1];
   for (const s of potSides) {

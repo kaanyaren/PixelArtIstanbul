@@ -56,6 +56,32 @@ function pointInPoly(cx, cy, poly) {
   return inside;
 }
 
+function chaikin(pts, iters = 2) {
+  let cur = pts;
+  for (let k = 0; k < iters; k++) {
+    if (cur.length < 3) return cur;
+    const out = [cur[0]];
+    for (let i = 0; i < cur.length - 1; i++) {
+      const [ax, ay] = cur[i];
+      const [bx, by] = cur[i + 1];
+      out.push([ax * 0.75 + bx * 0.25, ay * 0.75 + by * 0.25]);
+      out.push([ax * 0.25 + bx * 0.75, ay * 0.25 + by * 0.75]);
+    }
+    out.push(cur[cur.length - 1]);
+    cur = out;
+  }
+  return cur;
+}
+
+function distPtSeg(px, py, ax, ay, bx, by) {
+  const abx = bx - ax, aby = by - ay;
+  const apx = px - ax, apy = py - ay;
+  const ab2 = abx * abx + aby * aby;
+  const t = ab2 ? Math.max(0, Math.min(1, (apx * abx + apy * aby) / ab2)) : 0;
+  const cx = ax + abx * t, cy = ay + aby * t;
+  return Math.hypot(px - cx, py - cy);
+}
+
 function lerpInt(a, b, t) {
   return Math.round(a + (b - a) * t);
 }
@@ -289,17 +315,59 @@ class MainScene extends Phaser.Scene {
         ? [(a - center.lon) * kx, (center.lat - b) * 111320]
         : [a, b];
 
-    const buildings = (data.buildings || []).map((b, i) => {
+    let buildings = (data.buildings || []).map((b, i) => {
       const cart = b.pts.map(toCart);
       return { b, cart, bb: bboxOf(cart), i };
     });
-    const roadLines = (data.roads || []).map((road) => {
+    let roadLines = (data.roads || []).map((road) => {
       const raw = Array.isArray(road) ? road : road.pts || [];
       return raw.map(toCart);
     });
     const roadMeta = (data.roads || []).map((road) =>
       Array.isArray(road) ? { name: null, kind: null } : { name: road.name ?? null, kind: road.kind ?? null },
     );
+
+    // Road widths in metres (used for drawing and for clearing buildings off roads).
+    const ROAD_PX = 6.3;
+    const ROAD_M = {
+      motorway: [26, 19], trunk: [23, 16], primary: [22, 15], secondary: [16, 11],
+      tertiary: [13, 9], residential: [10, 7], unclassified: [9, 6], living_street: [9, 6],
+      service: [8, 5.5], busway: [9, 6], track: [7, 5], pedestrian: [4.5, 3],
+      footway: [4.5, 3], path: [4, 2.5], steps: [3.5, 2.5],
+    };
+    const roadHalfM = roadLines.map((_, ri) => {
+      const kind = roadMeta[ri]?.kind || '';
+      const w = ROAD_M[kind] || ROAD_M[kind.replace(/_link$/, '')] || ROAD_M.residential;
+      return w[0] / 2;
+    });
+
+    // Drop buildings sitting on roads: any footprint vertex or centroid within the
+    // road corridor (half width + 0.8m margin) means overlap.
+    const beforeB = buildings.length;
+    buildings = buildings.filter(({ cart, b }) => {
+      if (b.landmark) return true; // never drop the anchor landmark
+      const cx = cart.reduce((s, p) => s + p[0], 0) / cart.length;
+      const cy = cart.reduce((s, p) => s + p[1], 0) / cart.length;
+      const pts = [[cx, cy], ...cart];
+      for (let ri = 0; ri < roadLines.length; ri++) {
+        const line = roadLines[ri];
+        const thr = roadHalfM[ri] + 0.8;
+        for (let i = 0; i + 1 < line.length; i++) {
+          const [ax, ay] = line[i], [bx, by] = line[i + 1];
+          for (const [px, py] of pts) {
+            if (distPtSeg(px, py, ax, ay, bx, by) < thr) return false;
+          }
+        }
+      }
+      return true;
+    });
+    this.worldStats.buildings = buildings.length;
+
+
+    // Smooth turns for rendering (keep raw for joints/markings measured in cart metres).
+    const roadLinesRaw = roadLines;
+    roadLines = roadLines.map((line) => (line.length > 2 ? chaikin(line, 2) : line));
+
 
     // Ground base #E8DCC0 with subtle block variation.
     let minX = Infinity;
@@ -432,15 +500,7 @@ class MainScene extends Phaser.Scene {
     }
 
     // Streets: differentiated by road kind.
-    // Widths are real metres. Screen width = metres * ROAD_PX, compressed a
-    // little against the 8.94px/m iso scale so the street grid stays readable.
-    const ROAD_PX = 6.3;
-    const ROAD_M = {
-      motorway: [26, 19], trunk: [23, 16], primary: [22, 15], secondary: [16, 11],
-      tertiary: [13, 9], residential: [10, 7], unclassified: [9, 6], living_street: [9, 6],
-      service: [8, 5.5], busway: [9, 6], track: [7, 5], pedestrian: [4.5, 3],
-      footway: [4.5, 3], path: [4, 2.5], steps: [3.5, 2.5],
-    };
+    // ROAD_PX/ROAD_M defined above (also used for building-road clearance).
     const drivable = new Set(['primary', 'trunk', 'motorway', 'secondary', 'tertiary', 'residential']);
     const roadStyles = roadLines.map((_, ri) => {
       const kind = roadMeta[ri]?.kind;
@@ -455,6 +515,7 @@ class MainScene extends Phaser.Scene {
     });
 
     const roadScr = roadLines.map((line) => line.map(([x, y]) => toScreen(x, y)));
+
 
     // 1. Sidewalk base pass
     roadLines.forEach((line, ri) => {
