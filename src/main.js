@@ -363,27 +363,45 @@ class MainScene extends Phaser.Scene {
       return w[0] / 2;
     });
 
-    // Drop buildings whose centroid sits inside the carriageway.
-    // (Vertex check was too aggressive and hid valid roadside buildings.)
-    buildings = buildings.filter(({ cart, b }) => {
+    // Smooth turns for rendering; use same geometry for building-road clearance.
+    roadLines = roadLines.map((line) => (line.length > 2 ? chaikin(line, 3) : line));
+    const roadBbs = roadLines.map((line, ri) => {
+      const bb = bboxOf(line);
+      const pad = roadHalfM[ri] + 1;
+      return { minX: bb.minX - pad, maxX: bb.maxX + pad, minY: bb.minY - pad, maxY: bb.maxY + pad };
+    });
+
+    // Drop buildings too close to smoothed carriageways (landmarks kept).
+    buildings = buildings.filter(({ cart, bb, b }) => {
       if (b.landmark) return true;
       const cx = cart.reduce((s, p) => s + p[0], 0) / cart.length;
       const cy = cart.reduce((s, p) => s + p[1], 0) / cart.length;
+      let dc = Infinity;
+      let dcDrop = false;
+      const vNear = Array(cart.length).fill(false);
+      let deep = false;
       for (let ri = 0; ri < roadLines.length; ri++) {
+        const rbb = roadBbs[ri];
+        if (bb.maxX < rbb.minX || bb.minX > rbb.maxX || bb.maxY < rbb.minY || bb.minY > rbb.maxY) continue;
         const line = roadLines[ri];
-        const thr = Math.max(1.5, roadHalfM[ri] * 0.55);
+        const hm = roadHalfM[ri];
         for (let i = 0; i + 1 < line.length; i++) {
           const [ax, ay] = line[i], [bx, by] = line[i + 1];
-          if (distPtSeg(cx, cy, ax, ay, bx, by) < thr) return false;
+          const dC = distPtSeg(cx, cy, ax, ay, bx, by);
+          if (dC < dc) dc = dC;
+          if (dC < hm * 0.75) dcDrop = true;
+          for (let j = 0; j < cart.length; j++) {
+            const [px, py] = cart[j];
+            const d = distPtSeg(px, py, ax, ay, bx, by);
+            if (d < hm * 0.7) vNear[j] = true;
+            if (d < hm * 0.25) deep = true;
+          }
         }
       }
-      return true;
+      const nv = vNear.reduce((s, v) => s + (v ? 1 : 0), 0);
+      return !(dcDrop || nv >= 3 || deep);
     });
     this.worldStats.buildings = buildings.length;
-
-
-    // Smooth turns for rendering.
-    roadLines = roadLines.map((line) => (line.length > 2 ? chaikin(line, 3) : line));
 
 
 
