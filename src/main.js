@@ -9,14 +9,19 @@ import { SETTINGS, loadSettings, saveSettings, resetSettings } from './settings.
 const PX_M = 8; // vertical pixels per meter of height
 const OX = 400;
 const OY = 140;
+const DEFAULT_CENTER = { lat: 40.9968, lon: 28.8525, name: 'Barbaros 1. Sokak' };
 const FALLBACK = {
-  meta: { name: 'Darphane fallback' },
+  meta: { name: 'Barbaros 1. Sokak fallback', center: { lat: 40.9968, lon: 28.8525 } },
   buildings: [
     { id: 'b1', pts: [[0, 0], [10, 0], [10, 8], [0, 8]], height: 9 },
     { id: 'b2', pts: [[16, 4], [24, 4], [24, 12], [16, 12]], height: 6 },
   ],
   roads: [[[0, 14], [30, 14]]],
+  greens: [],
+  waters: [],
+  pois: [],
 };
+
 
 let playerTint = 0x4dc26b;
 
@@ -100,8 +105,9 @@ function wireAreaPicker() {
   openBtn.addEventListener('click', () => {
     modal.style.display = 'block';
     if (!areaMap) {
-      const c = window.__areaCenter || { lat: 41.0615, lon: 29.0125 };
+      const c = window.__areaCenter || DEFAULT_CENTER;
       areaMap = window.L.map('area-map').setView([c.lat, c.lon], 15);
+
       window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '© OpenStreetMap contributors',
@@ -109,10 +115,11 @@ function wireAreaPicker() {
       areaMarker = window.L.marker([c.lat, c.lon], { draggable: true }).addTo(areaMap);
       areaMap.on('click', (e) => areaMarker.setLatLng(e.latlng));
     } else {
-      const c = window.__areaCenter || { lat: 41.0615, lon: 29.0125 };
+      const c = window.__areaCenter || DEFAULT_CENTER;
       areaMap.setView([c.lat, c.lon], 15);
       areaMarker.setLatLng([c.lat, c.lon]);
     }
+
     setTimeout(() => areaMap && areaMap.invalidateSize(), 50);
   });
   if (cancel) cancel.addEventListener('click', () => { modal.style.display = 'none'; });
@@ -121,8 +128,9 @@ function wireAreaPicker() {
     gotoArea(ll.lat, ll.lng);
   });
   if (home) home.addEventListener('click', () => {
-    window.location.search = '';
+    gotoArea(DEFAULT_CENTER.lat, DEFAULT_CENTER.lon);
   });
+
   const searchInput = document.getElementById('area-search-input');
   const searchBtn = document.getElementById('area-search-btn');
   const searchStatus = document.getElementById('area-search-status');
@@ -192,34 +200,30 @@ class MainScene extends Phaser.Scene {
     });
 
     wireAreaPicker();
-    const a = areaFromURL();
-    if (a) {
-      const loading = document.getElementById('area-loading');
-      if (loading) loading.style.display = 'block';
-      fetchArea(a.lat, a.lon, this.cfg.radius)
-        .then((data) => {
-          if (loading) loading.style.display = 'none';
-          this.buildWorld(data);
-        })
-        .catch((err) => {
-          if (loading) loading.style.display = 'none';
-          const toast = document.getElementById('area-err');
-          if (toast) {
-            toast.textContent = String((err && err.message) || err || 'Area load failed');
-            toast.style.display = 'block';
-            setTimeout(() => { toast.style.display = 'none'; }, 4000);
-          }
-          fetch('data/darphane.json', { cache: 'no-store' })
-            .then((r) => (r.ok ? r.json() : FALLBACK))
-            .catch(() => FALLBACK)
-            .then((data) => this.buildWorld(data));
-        });
-    } else {
-      fetch('data/darphane.json', { cache: 'no-store' })
-        .then((r) => (r.ok ? r.json() : FALLBACK))
-        .catch(() => FALLBACK)
-        .then((data) => this.buildWorld(data));
-    }
+    const a = areaFromURL() || { lat: DEFAULT_CENTER.lat, lon: DEFAULT_CENTER.lon };
+    const loading = document.getElementById('area-loading');
+    if (loading) loading.style.display = 'block';
+    fetchArea(a.lat, a.lon, this.cfg.radius)
+      .then((data) => {
+        if (loading) loading.style.display = 'none';
+        if (!areaFromURL() && !data.meta.name) data.meta.name = DEFAULT_CENTER.name;
+        this.buildWorld(data);
+      })
+      .catch((err) => {
+        if (loading) loading.style.display = 'none';
+        const toast = document.getElementById('area-err');
+        if (toast) {
+          toast.textContent = String((err && err.message) || err || 'Area load failed');
+          toast.style.display = 'block';
+          setTimeout(() => { toast.style.display = 'none'; }, 4000);
+        }
+        // Try bundled Darphane data as offline fallback, else tiny fallback.
+        fetch('data/darphane.json', { cache: 'no-store' })
+          .then((r) => (r.ok ? r.json() : FALLBACK))
+          .catch(() => FALLBACK)
+          .then((data) => this.buildWorld(data));
+      });
+
   }
 
   // Sky bands top -> horizon, per time of day.
@@ -308,7 +312,8 @@ class MainScene extends Phaser.Scene {
     const center = meta.center || { lat: 41.0615, lon: 29.0125 };
 
 
-    window.__areaCenter = center;
+    window.__areaCenter = center || DEFAULT_CENTER;
+
     const kx = 111320 * Math.cos((center.lat * Math.PI) / 180);
     const toCart = ([a, b]) =>
       a > 10 && Math.abs(b) > 10
@@ -1131,19 +1136,20 @@ class MainScene extends Phaser.Scene {
   wireHud() {
     const areaEl = document.getElementById('hud-area');
     const coordEl = document.getElementById('hud-coords');
-    const c = window.__areaCenter || { lat: 41.0615, lon: 29.0125 };
+    const c = window.__areaCenter || DEFAULT_CENTER;
     if (coordEl) coordEl.textContent = `${c.lat.toFixed(4)}°N, ${c.lon.toFixed(4)}°E`;
     if (areaEl) {
       const url = areaFromURL();
       const meta = this.worldMeta || {};
       const stats = this.worldStats || {};
-      const base = url ? (meta.name || 'Dropped pin area') : 'Darphane · Istanbul';
+      const base = meta.name || (url ? 'Dropped pin area' : DEFAULT_CENTER.name);
       const bits = [];
       if (stats.buildings) bits.push(`${stats.buildings} bld`);
       if (stats.roads) bits.push(`${stats.roads} roads`);
       if (stats.pois) bits.push(`${stats.pois} poi`);
       areaEl.textContent = bits.length ? `${base} · ${bits.join(' · ')}` : base;
     }
+
     const help = document.getElementById('help-modal');
     const openHelp = () => { if (help) help.style.display = 'block'; };
     const closeHelp = () => { if (help) help.style.display = 'none'; };
