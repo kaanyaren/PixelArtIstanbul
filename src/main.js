@@ -271,7 +271,17 @@ class MainScene extends Phaser.Scene {
   buildWorld(data) {
     const g = this.add.graphics();
     const meta = data.meta || {};
+    this.worldMeta = meta;
+    this.worldStats = {
+      buildings: (data.buildings || []).length,
+      roads: (data.roads || []).length,
+      greens: (data.greens || []).length,
+      waters: (data.waters || []).length,
+      pois: (data.pois || []).length,
+    };
     const center = meta.center || { lat: 41.0615, lon: 29.0125 };
+
+
     window.__areaCenter = center;
     const kx = 111320 * Math.cos((center.lat * Math.PI) / 180);
     const toCart = ([a, b]) =>
@@ -1073,7 +1083,14 @@ class MainScene extends Phaser.Scene {
     if (coordEl) coordEl.textContent = `${c.lat.toFixed(4)}°N, ${c.lon.toFixed(4)}°E`;
     if (areaEl) {
       const url = areaFromURL();
-      areaEl.textContent = url ? 'Dropped pin area' : 'Darphane · Istanbul';
+      const meta = this.worldMeta || {};
+      const stats = this.worldStats || {};
+      const base = url ? (meta.name || 'Dropped pin area') : 'Darphane · Istanbul';
+      const bits = [];
+      if (stats.buildings) bits.push(`${stats.buildings} bld`);
+      if (stats.roads) bits.push(`${stats.roads} roads`);
+      if (stats.pois) bits.push(`${stats.pois} poi`);
+      areaEl.textContent = bits.length ? `${base} · ${bits.join(' · ')}` : base;
     }
     const help = document.getElementById('help-modal');
     const openHelp = () => { if (help) help.style.display = 'block'; };
