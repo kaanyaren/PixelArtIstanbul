@@ -1,3 +1,6 @@
+import { simplifyAreaData } from "./geom.js";
+import { getCachedArea, setCachedArea } from "./area-cache.js";
+
 export function areaFromURL() {
   if (typeof location === "undefined") return null;
   let p;
@@ -470,6 +473,14 @@ export async function fetchArea(lat, lon, r = 500) {
     "https://overpass.kumi.systems/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
   ];
+  const cacheVersion = "v2";
+
+  try {
+    const cached = await getCachedArea(la, lo, base, cacheVersion);
+    if (cached && cached.meta && Array.isArray(cached.buildings)) return cached;
+  } catch {
+    // ignore cache read errors
+  }
 
   async function fetchOverpass(url, ql, timeoutMs = 30000) {
     const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -490,7 +501,7 @@ export async function fetchArea(lat, lon, r = 500) {
     return parseOsmXml(await res.text());
   }
 
-  async function tryFetch(rad) {
+  async function tryFetchMain(rad) {
     // Fetch with 150m margin so edge buildings keep full geometry; clip to rad after.
     const frad = rad + 150;
     const dLat = frad / 111320;
@@ -515,18 +526,58 @@ export async function fetchArea(lat, lon, r = 500) {
     }
   }
 
+  async function tryFetchWorker(rad) {
+    if (typeof Worker === "undefined") return null;
+    return new Promise((resolve) => {
+      let done = false;
+      let worker;
+      const finish = (v) => {
+        if (done) return;
+        done = true;
+        try { worker?.terminate(); } catch {}
+        resolve(v);
+      };
+      try {
+        worker = new Worker(new URL("./area.worker.js", import.meta.url), { type: "module" });
+      } catch {
+        return finish(null);
+      }
+      const id = `${Date.now()}-${Math.random()}`;
+      const timer = setTimeout(() => finish(null), 35000);
+      worker.onmessage = (ev) => {
+        const msg = ev?.data;
+        if (!msg || msg.id !== id) return;
+        clearTimeout(timer);
+        finish(msg.ok ? msg.result : null);
+      };
+      worker.onerror = () => {
+        clearTimeout(timer);
+        finish(null);
+      };
+      try {
+        worker.postMessage({ type: "fetchArea", id, lat: la, lon: lo, r: rad, overpassUrls });
+      } catch {
+        clearTimeout(timer);
+        finish(null);
+      }
+    });
+  }
+
+  async function tryFetch(rad) {
+    const wres = await tryFetchWorker(rad);
+    if (wres) return wres;
+    return tryFetchMain(rad);
+  }
+
   let result = await tryFetch(base);
   if (result) {
-    const roads0 = result.roads.filter((r) => r.pts.some(([x, y]) => {
-      const kx = 111320 * Math.cos((la * Math.PI) / 180);
-      return Math.abs((x - lo) * kx) <= base && Math.abs((y - la) * 111320) <= base;
-    }));
+    const kx0 = 111320 * Math.cos((la * Math.PI) / 180);
+    const roads0 = result.roads.filter((r) => r.pts.some(([x, y]) => Math.abs((x - lo) * kx0) <= base && Math.abs((y - la) * 111320) <= base));
     const b0 = result.buildings.filter((b) => {
-      const kx = 111320 * Math.cos((la * Math.PI) / 180);
       let sx = 0;
       let sy = 0;
       for (const [x, y] of b.pts) { sx += x; sy += y; }
-      return Math.abs((sx / b.pts.length - lo) * kx) <= base && Math.abs((sy / b.pts.length - la) * 111320) <= base;
+      return Math.abs((sx / b.pts.length - lo) * kx0) <= base && Math.abs((sy / b.pts.length - la) * 111320) <= base;
     });
     if (b0.length === 0 && roads0.length > 0) {
       const retry = await tryFetch(base + 200);
@@ -544,15 +595,14 @@ export async function fetchArea(lat, lon, r = 500) {
   const { buildings, roads, greens, waters, pois, bbox, rad } = result;
   const kx = 111320 * Math.cos((la * Math.PI) / 180);
   const inR = (lonv, latv) => Math.abs((lonv - lo) * kx) <= rad && Math.abs((latv - la) * 111320) <= rad;
-  const keptB = buildings.filter((b) => {
-    let sx = 0;
-    let sy = 0;
-    for (const [x, y] of b.pts) {
-      sx += x;
-      sy += y;
-    }
-    return inR(sx / b.pts.length, sy / b.pts.length);
-  });
+  const keptB = [];
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    let sx = 0, sy = 0;
+    for (const [x, y] of b.pts) { sx += x; sy += y; }
+    if (inR(sx / b.pts.length, sy / b.pts.length)) keptB.push(b);
+    if ((i & 1023) === 0) await Promise.resolve();
+  }
   const keptR = roads.filter((r) => r.pts.some(([x, y]) => inR(x, y)));
   const keptG = greens.filter((g) => g.pts.some(([x, y]) => inR(x, y)));
   const keptW = waters.filter((w) => w.pts.some(([x, y]) => inR(x, y)));
@@ -563,7 +613,8 @@ export async function fetchArea(lat, lon, r = 500) {
   } catch {
     ms = [];
   }
-  return {
+
+  let out = {
     meta: { center: { lat: la, lon: lo }, source: "OpenStreetMap ODbL" },
     buildings: [...keptB, ...ms],
     roads: keptR,
@@ -571,4 +622,15 @@ export async function fetchArea(lat, lon, r = 500) {
     waters: keptW,
     pois: keptP,
   };
+  try {
+    out = simplifyAreaData(out, 1.5);
+  } catch {
+    // keep unsimplified on failure
+  }
+  try {
+    await setCachedArea(la, lo, base, out, cacheVersion);
+  } catch {
+    // ignore cache write errors
+  }
+  return out;
 }

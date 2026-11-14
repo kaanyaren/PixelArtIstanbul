@@ -9,6 +9,68 @@ import { SETTINGS, loadSettings, saveSettings, resetSettings } from './settings.
 const PX_M = 8; // vertical pixels per meter of height
 const OX = 400;
 const OY = 140;
+
+function perfLog(phase, ms, extra = '') {
+  console.info(`[pai-perf] ${phase} ${ms.toFixed(1)}ms${extra ? ' ' + extra : ''}`);
+}
+
+function rdp(pts, eps) {
+  if (!pts || pts.length < 3 || eps <= 0) return pts || [];
+  const first = pts[0], last = pts[pts.length - 1];
+  let maxD = 0, idx = -1;
+  const dx = last[0] - first[0], dy = last[1] - first[1];
+  const len2 = dx * dx + dy * dy;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i];
+    let d;
+    if (!len2) d = Math.hypot(px - first[0], py - first[1]);
+    else {
+      const t = ((px - first[0]) * dx + (py - first[1]) * dy) / len2;
+      const qx = t <= 0 ? first[0] : t >= 1 ? last[0] : first[0] + t * dx;
+      const qy = t <= 0 ? first[1] : t >= 1 ? last[1] : first[1] + t * dy;
+      d = Math.hypot(px - qx, py - qy);
+    }
+    if (d > maxD) { maxD = d; idx = i; }
+  }
+  if (maxD > eps) {
+    const a = rdp(pts.slice(0, idx + 1), eps);
+    const b = rdp(pts.slice(idx), eps);
+    return a.slice(0, -1).concat(b);
+  }
+  return [first, last];
+}
+
+function segGridIndex(lines, halfMs, cell = 12) {
+  const g = new Map();
+  lines.forEach((line, ri) => {
+    const hm = halfMs[ri] || 5;
+    for (let i = 0; i + 1 < line.length; i++) {
+      const [ax, ay] = line[i], [bx, by] = line[i + 1];
+      const minX = Math.min(ax, bx) - hm - 1, maxX = Math.max(ax, bx) + hm + 1;
+      const minY = Math.min(ay, by) - hm - 1, maxY = Math.max(ay, by) + hm + 1;
+      const x0 = Math.floor(minX / cell), x1 = Math.floor(maxX / cell);
+      const y0 = Math.floor(minY / cell), y1 = Math.floor(maxY / cell);
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+        const k = x + ',' + y;
+        let arr = g.get(k); if (!arr) { arr = []; g.set(k, arr); }
+        arr.push([ri, i]);
+      }
+    }
+  });
+  return { g, cell };
+}
+
+function querySegs(index, bb) {
+  const out = new Set();
+  const { g, cell } = index;
+  const x0 = Math.floor(bb.minX / cell), x1 = Math.floor(bb.maxX / cell);
+  const y0 = Math.floor(bb.minY / cell), y1 = Math.floor(bb.maxY / cell);
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+    const arr = g.get(x + ',' + y);
+    if (arr) for (const s of arr) out.add(s);
+  }
+  return out;
+}
 const DEFAULT_CENTER = { lat: 41.057, lon: 29.0082, name: 'Barbaros 1. Sokağı' };
 const FALLBACK = {
   meta: { name: 'Barbaros 1. Sokağı fallback', center: { lat: 41.057, lon: 29.0082 } },
@@ -173,6 +235,7 @@ class MainScene extends Phaser.Scene {
     this.labelObjects = [];
     this.walkPhase = 0;
     this.bboxes = [];
+    this.staticChunks = [];
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D');
     this.touch = { up: false, down: false, left: false, right: false };
@@ -204,13 +267,16 @@ class MainScene extends Phaser.Scene {
     const a = areaFromURL() || { lat: DEFAULT_CENTER.lat, lon: DEFAULT_CENTER.lon };
     const loading = document.getElementById('area-loading');
     if (loading) loading.style.display = 'block';
+    const tFetch = performance.now();
     fetchArea(a.lat, a.lon, this.cfg.radius)
       .then((data) => {
+        perfLog('fetch+parse', performance.now() - tFetch);
         if (loading) loading.style.display = 'none';
         if (!areaFromURL() && !data.meta.name) data.meta.name = DEFAULT_CENTER.name;
         this.buildWorld(data);
       })
       .catch((err) => {
+        perfLog('fetch+parse fail', performance.now() - tFetch);
         if (loading) loading.style.display = 'none';
         const toast = document.getElementById('area-err');
         const msg = String((err && err.message) || err || 'Area load failed');
@@ -223,10 +289,11 @@ class MainScene extends Phaser.Scene {
         }
         if (nearDarphane) {
           // Live fetch failed for bundled/default area: use bundled Darphane data.
+          const tFb = performance.now();
           fetch('data/darphane.json', { cache: 'no-store' })
             .then((r) => (r.ok ? r.json() : FALLBACK))
             .catch(() => FALLBACK)
-            .then((data) => this.buildWorld(data));
+            .then((data) => { perfLog('fetch fallback', performance.now() - tFb); this.buildWorld(data); });
           return;
         }
         // Wrong area for bundled data: keep local fallback but anchor to requested pin.
@@ -316,8 +383,13 @@ class MainScene extends Phaser.Scene {
   }
 
   buildWorld(data) {
-    const g = this.add.graphics();
+    const tBuild = performance.now();
+    for (const rt of this.staticChunks || []) rt.destroy();
+    this.staticChunks = [];
+    const g = this.make.graphics({ add: false });
     const meta = data.meta || {};
+    const zoom0 = (this.cameras && this.cameras.main && this.cameras.main.zoom) || this.cfg.zoom || 1;
+    const lod = zoom0 < 1.0 ? 0 : 1; // 0=low detail when zoomed out/fast
     this.worldMeta = meta;
     this.worldStats = {
       buildings: (data.buildings || []).length,
@@ -338,12 +410,12 @@ class MainScene extends Phaser.Scene {
         : [a, b];
 
     let buildings = (data.buildings || []).map((b, i) => {
-      const cart = b.pts.map(toCart);
+      const cart = rdp(b.pts.map(toCart), 0.3);
       return { b, cart, bb: bboxOf(cart), i };
     });
     let roadLines = (data.roads || []).map((road) => {
       const raw = Array.isArray(road) ? road : road.pts || [];
-      return raw.map(toCart);
+      return rdp(raw.map(toCart), 0.5);
     });
     const roadMeta = (data.roads || []).map((road) =>
       Array.isArray(road) ? { name: null, kind: null } : { name: road.name ?? null, kind: road.kind ?? null },
@@ -365,43 +437,39 @@ class MainScene extends Phaser.Scene {
 
     // Smooth turns for rendering; use same geometry for building-road clearance.
     roadLines = roadLines.map((line) => (line.length > 2 ? chaikin(line, 3) : line));
-    const roadBbs = roadLines.map((line, ri) => {
-      const bb = bboxOf(line);
-      const pad = roadHalfM[ri] + 1;
-      return { minX: bb.minX - pad, maxX: bb.maxX + pad, minY: bb.minY - pad, maxY: bb.maxY + pad };
-    });
+    const tClear = performance.now();
+    const roadSegIdx = segGridIndex(roadLines, roadHalfM, 12);
 
     // Drop buildings too close to smoothed carriageways (landmarks kept).
     buildings = buildings.filter(({ cart, bb, b }) => {
       if (b.landmark) return true;
       const cx = cart.reduce((s, p) => s + p[0], 0) / cart.length;
       const cy = cart.reduce((s, p) => s + p[1], 0) / cart.length;
-      let dc = Infinity;
       let dcDrop = false;
       const vNear = Array(cart.length).fill(false);
       let deep = false;
-      for (let ri = 0; ri < roadLines.length; ri++) {
-        const rbb = roadBbs[ri];
-        if (bb.maxX < rbb.minX || bb.minX > rbb.maxX || bb.maxY < rbb.minY || bb.minY > rbb.maxY) continue;
+      const qbb = { minX: bb.minX - 8, maxX: bb.maxX + 8, minY: bb.minY - 8, maxY: bb.maxY + 8 };
+      for (const key of querySegs(roadSegIdx, qbb)) {
+        const ri = key[0], i = key[1];
         const line = roadLines[ri];
         const hm = roadHalfM[ri];
-        for (let i = 0; i + 1 < line.length; i++) {
-          const [ax, ay] = line[i], [bx, by] = line[i + 1];
-          const dC = distPtSeg(cx, cy, ax, ay, bx, by);
-          if (dC < dc) dc = dC;
-          if (dC < hm * 0.75) dcDrop = true;
-          for (let j = 0; j < cart.length; j++) {
-            const [px, py] = cart[j];
-            const d = distPtSeg(px, py, ax, ay, bx, by);
-            if (d < hm * 0.7) vNear[j] = true;
-            if (d < hm * 0.25) deep = true;
-          }
+        const [ax, ay] = line[i], [bx, by] = line[i + 1];
+        const dC = distPtSeg(cx, cy, ax, ay, bx, by);
+        if (dC < hm * 0.75) dcDrop = true;
+        if (dcDrop) break;
+        for (let j = 0; j < cart.length; j++) {
+          const [px, py] = cart[j];
+          const d = distPtSeg(px, py, ax, ay, bx, by);
+          if (d < hm * 0.7) vNear[j] = true;
+          if (d < hm * 0.25) { deep = true; break; }
         }
+        if (deep) break;
       }
       const nv = vNear.reduce((s, v) => s + (v ? 1 : 0), 0);
       return !(dcDrop || nv >= 3 || deep);
     });
     this.worldStats.buildings = buildings.length;
+    perfLog('clearance', performance.now() - tClear, `(spatial ${buildings.length}b)`);
 
 
 
@@ -457,7 +525,8 @@ class MainScene extends Phaser.Scene {
 
     // Worn earth patches + weeds so the empty ground is not a blank sheet.
     const grand = mulberry32(31);
-    for (let i = 0; i < 70; i++) {
+    const decoN = lod ? 70 : 20;
+    for (let i = 0; i < decoN; i++) {
       const px = minX + grand() * (maxX - minX);
       const py = minY + grand() * (maxY - minY);
       const p = toScreen(px, py);
@@ -480,7 +549,7 @@ class MainScene extends Phaser.Scene {
     const greenCart = [];
     const waterCart = [];
     for (const gr of data.greens || []) {
-      const cart = (gr.pts || []).map(toCart);
+      const cart = rdp((gr.pts || []).map(toCart), 0.5);
       if (cart.length < 3) continue;
       greenCart.push(cart);
       const scr = cart.map(([x, y]) => toScreen(x, y));
@@ -493,7 +562,7 @@ class MainScene extends Phaser.Scene {
       let xs = cart.map((p) => p[0]), ys = cart.map((p) => p[1]);
       const x0 = Math.min(...xs), x1 = Math.max(...xs);
       const y0 = Math.min(...ys), y1 = Math.max(...ys);
-      const tries = Math.min(40, Math.round(((x1 - x0) * (y1 - y0)) / 400));
+      const tries = Math.min(lod ? 40 : 12, Math.round(((x1 - x0) * (y1 - y0)) / 400));
       for (let i = 0; i < tries; i++) {
         const tx = x0 + prand() * (x1 - x0);
         const ty = y0 + prand() * (y1 - y0);
@@ -509,7 +578,7 @@ class MainScene extends Phaser.Scene {
       }
     }
     for (const wt of data.waters || []) {
-      const cart = (wt.pts || []).map(toCart);
+      const cart = rdp((wt.pts || []).map(toCart), 0.5);
       if (cart.length < 2) continue;
       waterCart.push(cart);
       const scr = cart.map(([x, y]) => toScreen(x, y));
@@ -590,13 +659,13 @@ class MainScene extends Phaser.Scene {
         return { x: a.x + dx * t, y: a.y + dy * t, nx: -dy / slen, ny: dx / slen };
       };
 
-      if (s.type === 'steps' && total > 0.5) {
+      if (lod && s.type === 'steps' && total > 0.5) {
         g.lineStyle(2, 0x5a4f42, 1);
         for (let d = 1.5; d < total; d += 3) {
           const p = at(d);
           g.lineBetween(p.x - p.nx * 2, p.y - p.ny * 2, p.x + p.nx * 2, p.y + p.ny * 2);
         }
-      } else if (s.type === 'road' && total > 0.5) {
+      } else if (lod && s.type === 'road' && total > 0.5) {
         g.lineStyle(2, s.dashCol, 1);
         const dashLen = s.dual ? 1.2 : 1;
         for (let d = 0; d < total; d += s.dashStep) {
@@ -611,7 +680,7 @@ class MainScene extends Phaser.Scene {
         }
       }
 
-      if (drivable.has(kind) && total > 0.5) {
+      if (lod && drivable.has(kind) && total > 0.5) {
         for (let d = 27.5; d < total; d += 55) {
           const p = at(d);
           g.fillStyle(0x3d3a36, 1);
@@ -649,7 +718,7 @@ class MainScene extends Phaser.Scene {
           }
         }
         // Crosswalks: zebra of 5 white bars perpendicular at midpoint.
-        if (crossKinds.has(meta.kind) && cartLen > 80) {
+        if (lod && crossKinds.has(meta.kind) && cartLen > 80) {
           const half = cartLen / 2;
           let acc = 0;
           let mi = 0;
@@ -677,7 +746,7 @@ class MainScene extends Phaser.Scene {
           }
         }
         // Street lamps: every ~45m, alternating sides.
-        if (lampKinds.has(meta.kind) && cartLen > 45) {
+        if (lod && lampKinds.has(meta.kind) && cartLen > 45) {
           const cum = [0];
           for (let i = 0; i + 1 < line.length; i++) {
             cum.push(cum[i] + Math.hypot(line[i + 1][0] - line[i][0], line[i + 1][1] - line[i][1]));
@@ -726,7 +795,28 @@ class MainScene extends Phaser.Scene {
       const pal = STYLES[style] || STYLES.apartment;
       const facade = b.color ?? pal.facades[seed % pal.facades.length];
       const floors = Math.max(1, Math.round(b.height / 3));
-      drawBuilding(g, base, { heightPx: b.height * PX_M, seed, floors, facade, style });
+      const hPx = b.height * PX_M;
+      if (lod) {
+        drawBuilding(g, base, { heightPx: hPx, seed, floors, facade, style });
+      } else {
+        // Low LOD: simple extrusion, skip windows/cornice/detail.
+        const top = base.map((p) => ({ x: p.x, y: p.y - hPx }));
+        const pts = (arr) => arr.map((p) => new Phaser.Geom.Point(p.x, p.y));
+        for (let i = 0; i < base.length; i++) {
+          const n = (i + 1) % base.length;
+          const wall = [base[i], base[n], top[n], top[i]];
+          const shade = 0.85 + 0.15 * (((i + seed) % 3) / 2);
+          const r = Math.min(255, ((facade >> 16) & 255) * shade) | 0;
+          const gv = Math.min(255, ((facade >> 8) & 255) * shade) | 0;
+          const bv = Math.min(255, (facade & 255) * shade) | 0;
+          g.fillStyle((r << 16) | (gv << 8) | bv, 1);
+          g.fillPoints(pts(wall), true);
+        }
+        g.fillStyle(0x7a5a3a, 1);
+        g.fillPoints(pts(top), true);
+        g.lineStyle(1, 0x000000, 0.15);
+        g.strokePoints(pts(top), true);
+      }
       this.bboxes.push(bb);
       if (b.name && b.name !== b.landmark) {
         nameCands.push({
@@ -761,9 +851,10 @@ class MainScene extends Phaser.Scene {
       const total = cum[cum.length - 1];
       if (total < 7) return;
       const rand = mulberry32(hashStr(`road-${ri}`));
-      const count = Math.floor((total - 7) / 14);
+      const step = lod ? 14 : 28;
+      const count = Math.floor((total - 7) / step);
       for (let k = 0; k <= count; k++) {
-        const s = 7 + k * 14;
+        const s = 7 + k * step;
         let seg = 0;
         while (seg + 1 < cum.length - 1 && cum[seg + 1] < s) seg++;
         const segLen = cum[seg + 1] - cum[seg];
@@ -784,7 +875,7 @@ class MainScene extends Phaser.Scene {
       }
     });
     // Courtyard trees behind some buildings (far side = smaller x+y).
-    for (const { bb } of buildings) {
+    if (lod) for (const { bb } of buildings) {
       const seed = hashStr(`${bb.minX},${bb.minY}`);
       if (seed % 3 !== 0) continue;
       const cx = (bb.minX + bb.maxX) / 2;
@@ -807,6 +898,29 @@ class MainScene extends Phaser.Scene {
         poiNames.push({ name: poi.name, x: sp.x, y: sp.y });
       }
     }
+
+    // Bake static world into chunked RenderTextures (<= ~2048px).
+    const tBake = performance.now();
+    const padG = 300;
+    const gw = Math.max(1, (c11.x - c01.x) + padG * 2);
+    const gh = Math.max(1, (c01.y - c00.y) + padG * 2);
+    const ox = c01.x - padG;
+    const oy = c00.y - padG;
+    const chunk = 1024;
+    for (let y = 0; y < gh; y += chunk) {
+      for (let x = 0; x < gw; x += chunk) {
+        const w = Math.min(chunk, Math.ceil(gw - x));
+        const h = Math.min(chunk, Math.ceil(gh - y));
+        if (w <= 0 || h <= 0) continue;
+        const rt = this.add.renderTexture(ox + x, oy + y, w, h);
+        rt.setOrigin(0, 0);
+        rt.setDepth(-500);
+        rt.draw(g, -(ox + x), -(oy + y));
+        this.staticChunks.push(rt);
+      }
+    }
+    g.destroy();
+    perfLog('draw+bake', performance.now() - tBake, `${this.staticChunks.length} chunks, lod=${lod}`);
 
     // Screen-space road loops for cars (NPC module reads scene.roads).
 
@@ -1015,6 +1129,7 @@ class MainScene extends Phaser.Scene {
     spawnGulls(this, Math.round(5 * this.cfg.life));
     this.buildSettingsUI();
     this.wireHud();
+    perfLog('build total', performance.now() - tBuild, `bld=${this.worldStats.buildings} roads=${this.worldStats.roads}`);
     console.info('[pai]', { center: window.__areaCenter, stats: this.worldStats });
   }
 
@@ -1088,6 +1203,8 @@ class MainScene extends Phaser.Scene {
     const ctx = cv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.mini = { ctx, size, layer, px, py };
+    this._miniLastX = this.cartX;
+    this._miniLastY = this.cartY;
     this.updateMinimap();
   }
 
@@ -1337,8 +1454,11 @@ class MainScene extends Phaser.Scene {
     }
     this.syncPlayer();
     this._miniT = (this._miniT || 0) + dt;
-    if (this._miniT > 0.15) {
+    const movedMini = Math.hypot(this.cartX - (this._miniLastX ?? this.cartX), this.cartY - (this._miniLastY ?? this.cartY));
+    if (this._miniT > 0.3 || movedMini > 2) {
       this._miniT = 0;
+      this._miniLastX = this.cartX;
+      this._miniLastY = this.cartY;
       this.updateMinimap();
     }
   }
