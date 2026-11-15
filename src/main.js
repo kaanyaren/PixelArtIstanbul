@@ -1,5 +1,6 @@
 import * as Phaser from 'phaser';
 import { cartToIso } from './iso.js';
+import { smoothPolyline, offsetPolyline, strokeStrips } from './geom.js';
 import { PAL, STYLES, styleFor, mulberry32, hashStr, drawBuilding, drawTree } from './look.js';
 import { drawProp, drawPropShadow } from './props.js';
 import { spawnCats, spawnCars, spawnPeople, spawnGulls, updateNPCs } from './npcs.js';
@@ -124,23 +125,6 @@ function pointInPoly(cx, cy, poly) {
   return inside;
 }
 
-function chaikin(pts, iters = 2) {
-  let cur = pts;
-  for (let k = 0; k < iters; k++) {
-    if (cur.length < 3) return cur;
-    const out = [cur[0]];
-    for (let i = 0; i < cur.length - 1; i++) {
-      const [ax, ay] = cur[i];
-      const [bx, by] = cur[i + 1];
-      out.push([ax * 0.75 + bx * 0.25, ay * 0.75 + by * 0.25]);
-      out.push([ax * 0.25 + bx * 0.75, ay * 0.25 + by * 0.75]);
-    }
-    out.push(cur[cur.length - 1]);
-    cur = out;
-  }
-  return cur;
-}
-
 function distPtSeg(px, py, ax, ay, bx, by) {
   const abx = bx - ax, aby = by - ay;
   const apx = px - ax, apy = py - ay;
@@ -218,6 +202,85 @@ function wireAreaPicker() {
   };
   if (searchBtn) searchBtn.addEventListener('click', doSearch);
   if (searchInput) searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+}
+
+// Route draw ops to overlapping RenderTexture chunks so bake avoids replaying
+// the whole world command buffer once per chunk.
+function makeChunkedGraphics(scene, ox, oy, gw, gh, chunkSize) {
+  const cols = Math.max(1, Math.ceil(gw / chunkSize));
+  const rows = Math.max(1, Math.ceil(gh / chunkSize));
+  const chunks = [];
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const x = col * chunkSize;
+      const y = row * chunkSize;
+      const w = Math.min(chunkSize, Math.ceil(gw - x));
+      const h = Math.min(chunkSize, Math.ceil(gh - y));
+      if (w <= 0 || h <= 0) continue;
+      chunks.push({ x: ox + x, y: oy + y, w, h, gfx: scene.make.graphics({ x: 0, y: 0, add: false }) });
+    }
+  }
+
+  let fillColor = 0xffffff, fillAlpha = 1, hasFill = false;
+  let lineWidth = 1, lineColor = 0x000000, lineAlpha = 1, hasLine = false;
+  const chunkState = chunks.map(() => ({ fill: '', line: '' }));
+
+  function apply(chunk, idx) {
+    const st = chunkState[idx];
+    const fk = hasFill ? `${fillColor},${fillAlpha}` : '';
+    if (st.fill !== fk) { if (hasFill) chunk.gfx.fillStyle(fillColor, fillAlpha); st.fill = fk; }
+    const lk = hasLine ? `${lineWidth},${lineColor},${lineAlpha}` : '';
+    if (st.line !== lk) { if (hasLine) chunk.gfx.lineStyle(lineWidth, lineColor, lineAlpha); st.line = lk; }
+  }
+
+  function eachBBox(minX, minY, maxX, maxY, pad, fn) {
+    const p = pad || 0;
+    const a = minX - p, b = minY - p, c = maxX + p, d = maxY + p;
+    for (let i = 0; i < chunks.length; i++) {
+      const ch = chunks[i];
+      if (c < ch.x || a > ch.x + ch.w || d < ch.y || b > ch.y + ch.h) continue;
+      apply(ch, i);
+      fn(ch.gfx);
+    }
+  }
+
+  function bboxPoints(points) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      const x = p.x; const y = p.y;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    return { minX, minY, maxX, maxY };
+  }
+
+  const api = {
+    fillStyle(color, alpha = 1) { fillColor = color; fillAlpha = alpha; hasFill = true; },
+    lineStyle(width, color, alpha = 1) { lineWidth = width; lineColor = color; lineAlpha = alpha; hasLine = true; },
+    fillPoints(points, _close) {
+      if (!points || !points.length) return;
+      const b = bboxPoints(points);
+      eachBBox(b.minX, b.minY, b.maxX, b.maxY, 2, (gfx) => gfx.fillPoints(points, _close));
+    },
+    strokePoints(points, _close) {
+      if (!points || !points.length) return;
+      const b = bboxPoints(points);
+      eachBBox(b.minX, b.minY, b.maxX, b.maxY, lineWidth + 2, (gfx) => gfx.strokePoints(points, _close));
+    },
+    fillCircle(x, y, r) { eachBBox(x - r, y - r, x + r, y + r, 2, (gfx) => gfx.fillCircle(x, y, r)); },
+    fillEllipse(x, y, w, h) {
+      const rx = w / 2, ry = h / 2;
+      eachBBox(x - rx, y - ry, x + rx, y + ry, 2, (gfx) => gfx.fillEllipse(x, y, w, h));
+    },
+    fillRect(x, y, w, h) { eachBBox(x, y, x + w, y + h, 2, (gfx) => gfx.fillRect(x, y, w, h)); },
+    lineBetween(x1, y1, x2, y2) {
+      eachBBox(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2), lineWidth + 2, (gfx) => gfx.lineBetween(x1, y1, x2, y2));
+    },
+    destroy() { for (const ch of chunks) ch.gfx.destroy(); },
+  };
+
+  return { api, chunks };
 }
 
 class MainScene extends Phaser.Scene {
@@ -386,7 +449,7 @@ class MainScene extends Phaser.Scene {
     const tBuild = performance.now();
     for (const rt of this.staticChunks || []) rt.destroy();
     this.staticChunks = [];
-    const g = this.make.graphics({ add: false });
+    let g; // chunk-routed Graphics, created once the world bbox is known
     const meta = data.meta || {};
     const zoom0 = (this.cameras && this.cameras.main && this.cameras.main.zoom) || this.cfg.zoom || 1;
     const lod = zoom0 < 1.0 ? 0 : 1; // 0=low detail when zoomed out/fast
@@ -436,7 +499,7 @@ class MainScene extends Phaser.Scene {
     });
 
     // Smooth turns for rendering; use same geometry for building-road clearance.
-    roadLines = roadLines.map((line) => (line.length > 2 ? chaikin(line, 3) : line));
+    roadLines = roadLines.map((line) => (line.length > 2 ? smoothPolyline(line, 1) : line));
     const tClear = performance.now();
     const roadSegIdx = segGridIndex(roadLines, roadHalfM, 12);
 
@@ -512,6 +575,17 @@ class MainScene extends Phaser.Scene {
     const c10 = toScreen(maxX, minY);
     const c11 = toScreen(maxX, maxY);
     const c01 = toScreen(minX, maxY);
+    // Chunk geometry + command router: each draw call lands only in the
+    // RenderTexture chunks it can touch, so the bake never replays the whole
+    // world once per chunk.
+    const padG = 300;
+    const chunkSize = 1024;
+    const gw = Math.max(1, (c11.x - c01.x) + padG * 2);
+    const gh = Math.max(1, (c01.y - c00.y) + padG * 2);
+    const ox = c01.x - padG;
+    const oy = c00.y - padG;
+    const gfx = makeChunkedGraphics(this, ox, oy, gw, gh, chunkSize);
+    g = gfx.api;
     g.fillStyle(0xe8dcc0, 1);
     g.fillPoints(
       [
@@ -606,35 +680,35 @@ class MainScene extends Phaser.Scene {
 
     const roadScr = roadLines.map((line) => line.map(([x, y]) => toScreen(x, y)));
 
+    // Continuous strip fills: per-segment thick strokes leave butt-join
+    // notches on curves, so every layer is one closed outline plus round caps.
+    const fillStrips = (scr, halfW, color) => {
+      const { polygons, caps } = strokeStrips(scr, halfW);
+      g.fillStyle(color, 1);
+      for (const poly of polygons) g.fillPoints(poly, true);
+      for (const cap of caps) g.fillCircle(cap.x, cap.y, cap.r);
+    };
 
     // 1. Sidewalk base pass
-    roadLines.forEach((line, ri) => {
-      g.lineStyle(roadStyles[ri].baseW, 0xd8ccb4, 1);
-      const scr = roadScr[ri];
-      for (let i = 0; i + 1 < line.length; i++) {
-        g.lineBetween(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
-      }
+    roadScr.forEach((scr, ri) => {
+      fillStrips(scr, roadStyles[ri].baseW / 2, 0xd8ccb4);
     });
 
-    // 2. Kerb strip: the metre of stone between pavement and asphalt.
-    roadLines.forEach((line, ri) => {
+    // 2. Kerb: a thin stone strip at the asphalt edge on both sides.
+    roadScr.forEach((scr, ri) => {
       const s = roadStyles[ri];
-      const w = Math.max(1, s.baseW - s.surfW);
-      g.lineStyle(w, 0xc4ae8c, 1);
-      const scr = roadScr[ri];
-      for (let i = 0; i + 1 < line.length; i++) {
-        g.lineBetween(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
-      }
+      if (s.type === 'walkway' || s.type === 'steps') return;
+      const kerbPx = Math.min(2.5, (s.baseW - s.surfW) / 4);
+      if (kerbPx < 0.6) return;
+      const off = s.surfW / 2 + kerbPx / 2;
+      fillStrips(offsetPolyline(scr, off), kerbPx / 2, 0xc4ae8c);
+      fillStrips(offsetPolyline(scr, -off), kerbPx / 2, 0xc4ae8c);
     });
 
     // 3. Road surface pass
-    roadLines.forEach((line, ri) => {
+    roadScr.forEach((scr, ri) => {
       const s = roadStyles[ri];
-      g.lineStyle(s.surfW, s.surfCol, 1);
-      const scr = roadScr[ri];
-      for (let i = 0; i + 1 < line.length; i++) {
-        g.lineBetween(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
-      }
+      fillStrips(scr, s.surfW / 2, s.surfCol);
     });
 
     // 3. Markings, step treads & manhole covers
@@ -899,25 +973,14 @@ class MainScene extends Phaser.Scene {
       }
     }
 
-    // Bake static world into chunked RenderTextures (<= ~2048px).
+    // Bake each routed chunk into its own RenderTexture.
     const tBake = performance.now();
-    const padG = 300;
-    const gw = Math.max(1, (c11.x - c01.x) + padG * 2);
-    const gh = Math.max(1, (c01.y - c00.y) + padG * 2);
-    const ox = c01.x - padG;
-    const oy = c00.y - padG;
-    const chunk = 1024;
-    for (let y = 0; y < gh; y += chunk) {
-      for (let x = 0; x < gw; x += chunk) {
-        const w = Math.min(chunk, Math.ceil(gw - x));
-        const h = Math.min(chunk, Math.ceil(gh - y));
-        if (w <= 0 || h <= 0) continue;
-        const rt = this.add.renderTexture(ox + x, oy + y, w, h);
-        rt.setOrigin(0, 0);
-        rt.setDepth(-500);
-        rt.draw(g, -(ox + x), -(oy + y));
-        this.staticChunks.push(rt);
-      }
+    for (const ch of gfx.chunks) {
+      const rt = this.add.renderTexture(ch.x, ch.y, ch.w, ch.h);
+      rt.setOrigin(0, 0);
+      rt.setDepth(-500);
+      rt.draw(ch.gfx, -ch.x, -ch.y);
+      this.staticChunks.push(rt);
     }
     g.destroy();
     perfLog('draw+bake', performance.now() - tBake, `${this.staticChunks.length} chunks, lod=${lod}`);
